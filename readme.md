@@ -45,12 +45,14 @@ sync_3_camera 文件夹之外的是rgb+evk4的捕获脚本，后更新到sync_3_
 图传启动脚本
 
 ## 4. 使用方式
-1. 图传启动 
-```bash
-sudo cam_streaming.sh
-```
+1. 图传启动
+
+    ```bash
+    sudo cam_streaming.sh
+    ```
 2. 采集脚本启动
-```bash
-sudo python sync_3_camera.py
-```
+
+    ```bash
+    sudo python sync_3_camera.py
+    ```
 

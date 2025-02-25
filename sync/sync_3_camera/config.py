@@ -15,6 +15,8 @@ FLIR_HEIGHT = 1800        # 裁剪后高度
 # 计算居中偏移量
 FLIR_OFFSET_X = (FLIR_ORIGIN_WIDTH - FLIR_WIDTH) // 2   # 水平偏移量
 FLIR_OFFSET_Y = (FLIR_ORIGIN_HEIGHT - FLIR_HEIGHT) // 2 # 垂直偏移量
+FLIR_ThroughputLimit = 430000000  # 限制相机吞吐量
+
 
 # 红外相机配置参数
 THERMAL_CAMERA_IP = "192.168.1.11"

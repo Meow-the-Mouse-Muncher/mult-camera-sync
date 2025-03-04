@@ -3,6 +3,7 @@ import numpy as np
 import cv2 as cv
 import os
 from config import *
+import json
 
 class FlirCamera:
     """FLIR相机控制类"""
@@ -486,8 +487,14 @@ class FlirCamera:
                              cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
 
         # 保存时间信息到 FLIR 目录
-        np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
-        np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
+        # np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
+        # np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
+        time_data = {
+            'exposure_times': exposure_times.tolist(),
+            'timestamps': timestamps.tolist()
+        }
+        with open(os.path.join(flir_dir, 'timing.json'), 'w') as f:
+            json.dump(time_data, f, indent=4)
 
     def read_chunk_data(self, image):
         """读取图像块数据

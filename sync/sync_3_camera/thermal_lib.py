@@ -175,9 +175,9 @@ class ThermalCamera:
             gray_img = Image.fromarray(gray_array)
             gray_img.save(gray_path)
             
-            sdk_gray2rgb(byref(self.gray), byref(self.rgb), self.imgsize[1], self.imgsize[0], 0, 1)
-            rgb_pathbytes = str.encode(rgb_path)
-            sdk_saveframe2jpg(rgb_pathbytes, frame, self.rgb)
+            # sdk_gray2rgb(byref(self.gray), byref(self.rgb), self.imgsize[1], self.imgsize[0], 0, 1)
+            # rgb_pathbytes = str.encode(rgb_path)
+            # sdk_saveframe2jpg(rgb_pathbytes, frame, self.rgb)
             
         print(f"已完成 {frames_to_process} 张图像的处理")
 

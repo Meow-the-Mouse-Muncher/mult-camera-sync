@@ -1,10 +1,10 @@
 from multiprocessing import Value
 
 # FLIR相机配置参数
-FLIR_FRAMERATE = 12  # fps
+FLIR_FRAMERATE = 10  # fps
 FLIR_EXPOSURE_TIME = 50000  # us
 FLIR_BALANCE_WHITE = 1.6
-FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
+FLIR_AUTO_EXPOSURE = True  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
 
 # FLIR相机分辨率和裁剪设置
@@ -35,7 +35,7 @@ PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 
 # 触发配置
-NUM_IMAGES = 3 + 1  # number of images to save (+1 because prophesee first trigger is incomplete)
+NUM_IMAGES = 100 + 1  # number of images to save (+1 because prophesee first trigger is incomplete)
 # 串口配置
 SERIAL_PORT = '/dev/ttyTHS1'
 SERIAL_BAUDRATE = 115200

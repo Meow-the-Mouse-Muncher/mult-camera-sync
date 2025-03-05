@@ -25,7 +25,7 @@ from metavision_hal import I_EventTrailFilterModule
 
 
 # 全局变量设置
-NUM_IMAGES = 20+1  # number of images to save
+NUM_IMAGES = 50+1  # number of images to save
 #prophesee first trigger is incompelete, so we save one more image
 # evk4 触发反向了
 ## flir camera set
@@ -166,7 +166,7 @@ class event():
             # 设置过滤类型为 STC_CUT_TRAIL
             event_trail_filter.set_type(I_EventTrailFilterModule.Type.STC_CUT_TRAIL)
             # 设置阈值
-            event_trail_filter.set_threshold(100000)  # 设置阈值为100000微秒
+            event_trail_filter.set_threshold(2000)  # 设置阈值为100000微秒
             # 启用过滤器
             event_trail_filter.enable(True)
             print("Event trail filter enabled.")

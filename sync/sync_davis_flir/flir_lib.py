@@ -3,7 +3,6 @@ import numpy as np
 import cv2 as cv
 import os
 from config import *
-import json
 
 class FlirCamera:
     """FLIR相机控制类"""
@@ -36,8 +35,8 @@ class FlirCamera:
             # 配置像素格式
             self._set_pixel_format(nodemap)
             
-            # 配置ROI
-            self._set_roi(nodemap)
+            # # 配置ROI
+            # self._set_roi(nodemap)
             
             # 配置曝光
             self._set_exposure(nodemap)
@@ -62,6 +61,8 @@ class FlirCamera:
             
             # 配置数据块模式
             self._enable_chunk_data(nodemap)
+
+
             
             return True
             
@@ -210,7 +211,7 @@ class FlirCamera:
         try:
             node_device_link_throughput_limit = PySpin.CIntegerPtr(nodemap.GetNode('DeviceLinkThroughputLimit'))
             if PySpin.IsAvailable(node_device_link_throughput_limit) and PySpin.IsWritable(node_device_link_throughput_limit):
-                node_device_link_throughput_limit.SetValue(FLIR_ThroughputLimit)
+                node_device_link_throughput_limit.SetValue(500000000)
 
         except PySpin.SpinnakerException as ex:
             print(f'设置吞吐量错误: {ex}')
@@ -253,13 +254,24 @@ class FlirCamera:
                 node_trigger_mode_off = node_trigger_mode.GetEntryByName('Off')
                 if PySpin.IsReadable(node_trigger_mode_off):
                     node_trigger_mode.SetIntValue(node_trigger_mode_off.GetValue())
-
                 # 重置触发源为软件触发
                 node_trigger_source = PySpin.CEnumerationPtr(nodemap.GetNode('TriggerSource'))
                 if PySpin.IsReadable(node_trigger_source) and PySpin.IsWritable(node_trigger_source):
                     node_trigger_source_software = node_trigger_source.GetEntryByName('Software')
                     if PySpin.IsReadable(node_trigger_source_software):
                         node_trigger_source.SetIntValue(node_trigger_source_software.GetValue()) 
+ 
+                node_line_selector = PySpin.CEnumerationPtr(nodemap.GetNode('LineSelector'))
+                entry_line_selector_line2 = node_line_selector.GetEntryByName('Line2')
+                line_selector_line2 = entry_line_selector_line2.GetValue()
+                node_line_selector.SetIntValue(line_selector_line2)
+
+                node_line_mode = PySpin.CEnumerationPtr(nodemap.GetNode('LineMode'))
+                entry_line_mode_output = node_line_mode.GetEntryByName('Output')
+                line_mode_output = entry_line_mode_output.GetValue()
+                node_line_mode.SetIntValue(line_mode_output)
+        
+    
 
         except PySpin.SpinnakerException as ex:
             print(f'设置触发模式错误: {ex}')
@@ -410,38 +422,36 @@ class FlirCamera:
         Returns:
             bool: 采集是否成功
         """
+        processor = PySpin.ImageProcessor()
+        processor.SetColorProcessing(PySpin.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
         try:
-            images = np.empty((NUM_IMAGES, FLIR_HEIGHT, FLIR_WIDTH), dtype=np.uint8)
+            images = np.empty((NUM_IMAGES, FLIR_ORIGIN_HEIGHT,FLIR_ORIGIN_WIDTH, 3), dtype=np.uint8)
             timestamps = np.zeros(NUM_IMAGES, dtype=np.uint64)
             exposure_times = np.zeros(NUM_IMAGES, dtype=float)
             
             for i in range(NUM_IMAGES):
-                if RUNNING.value == 0:
-                    break
                 image_result = cam.GetNextImage(1000)
                 if image_result.IsIncomplete():
                     print(f'图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()
                     continue
                 
-                images[i] = image_result.GetNDArray()
+                converted = processor.Convert(image_result, PySpin.PixelFormat_RGB8)
+                images[i] = converted.GetNDArray()
                 _, exposure_times[i], timestamps[i] = self.read_chunk_data(image_result)
                 image_result.Release()
-            
             cam.EndAcquisition()
-            ACQUISITION_FLAG.value = 1  # 使用 .value 访问共享变量
-
-            self._save_data(images, exposure_times, timestamps, path)
-            
+            print("图像采集完成")
             # 添加重置
             self._disable_chunk_data(nodemap)
             self._reset_trigger(nodemap)
+            #save rgb data
+            self._save_data(images, exposure_times, timestamps,path)
             
             return True
             
         except PySpin.SpinnakerException as ex:
             print(f'图像采集错误: {ex}')
-            RUNNING.value = 0
             return False
 
     def _save_data(self, images, exposure_times, timestamps, path):
@@ -456,45 +466,14 @@ class FlirCamera:
         flir_dir = os.path.join(path, "flir")
         preview_dir = os.path.join(flir_dir, "preview_images")
         os.makedirs(preview_dir, exist_ok=True)
-
-        # 保存原始数据
-        with open(os.path.join(flir_dir, "images.raw"), 'wb') as f:
-            # 写入头信息
-            header = np.array([NUM_IMAGES, FLIR_OFFSET_X, FLIR_OFFSET_Y, 
-                             FLIR_WIDTH, FLIR_HEIGHT], dtype=np.int32)
-            f.write(header.tobytes())
-            
-            # 写入图��数据并生成预览图
-            for idx, img_data in enumerate(images):
-                f.write(img_data.tobytes())
-                if idx % 10 == 0:
-                    
-                    # 确保使用正确的 Bayer 模式进行转换
-                    if FLIR_OFFSET_X % 2 == 0 and FLIR_OFFSET_Y % 2 == 0:
-                        rgb_image = cv.cvtColor(img_data, cv.COLOR_BayerRG2RGB)
-                    else:
-                        # 根据偏移量选择正确的 Bayer 模式
-                        bayer_patterns = {
-                            (0, 0): cv.COLOR_BayerRG2RGB,  # RG
-                            (1, 0): cv.COLOR_BayerGR2RGB,  # GR
-                            (0, 1): cv.COLOR_BayerGB2RGB,  # GB
-                            (1, 1): cv.COLOR_BayerBG2RGB   # BG
-                        }
-                        pattern_key = (FLIR_OFFSET_X % 2, FLIR_OFFSET_Y % 2)
-                        rgb_image = cv.cvtColor(img_data, bayer_patterns[pattern_key])
-                    
-                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), 
-                             cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
+        # 保存图像数据
+        for i, image in enumerate(images):
+            image_path = os.path.join(preview_dir, f'image_{i:04d}.png')
+            cv.imwrite(image_path, image)
 
         # 保存时间信息到 FLIR 目录
-        # np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
-        # np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
-        time_data = {
-            'exposure_times': exposure_times.tolist(),
-            'timestamps': timestamps.tolist()
-        }
-        with open(os.path.join(flir_dir, 'timing.json'), 'w') as f:
-            json.dump(time_data, f, indent=4)
+        np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
+        np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
 
     def read_chunk_data(self, image):
         """读取图像块数据

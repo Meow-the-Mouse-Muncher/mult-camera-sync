@@ -430,8 +430,8 @@ class FlirCamera:
             
             cam.EndAcquisition()
             ACQUISITION_FLAG.value = 1  # 使用 .value 访问共享变量
-
-            self._save_data(images, exposure_times, timestamps, path)
+            # 只保存有效图像！！！！
+            self._save_data(images[1:], exposure_times, timestamps, path)
             
             # 添加重置
             self._disable_chunk_data(nodemap)

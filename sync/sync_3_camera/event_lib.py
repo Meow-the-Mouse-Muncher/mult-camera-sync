@@ -80,7 +80,7 @@ class EventCamera:
         ensure_dir(os.path.join(self.path, 'event'))
         
         # 打开相机
-        self.device = initiate_device(path='')
+        self.device = initiate_device(path='',do_time_shifting=False)
         if not self.device:
             print("未检测到事件相机")
             return False

@@ -28,7 +28,7 @@ class EventCamera:
         self.ieventstream = None
         self.device = None
 
-    def prophesee_tirgger_found(self, polarity: int = 0, do_time_shifting=True):
+    def prophesee_tirgger_found(self, polarity: int = 0, do_time_shifting=False):
         """查找触发信号并保存时间戳
         Args:
             polarity (int): 触发极性，0为正，1为负
@@ -104,7 +104,7 @@ class EventCamera:
             # 设置过滤类型为 STC_CUT_TRAIL
             event_trail_filter.set_type(I_EventTrailFilterModule.Type.STC_CUT_TRAIL)
             # 设置阈值
-            event_trail_filter.set_threshold(PROPHESEE_FILTER_THS)  # 设置阈值为100000微秒 PROPHESEE_FILTER_THS  = 10000
+            event_trail_filter.set_threshold(PROPHESEE_FILTER_THS)  #  PROPHESEE_FILTER_THS  = 10000
             # 启用过滤器
             event_trail_filter.enable(True)
             print("Event trail filter enabled.")

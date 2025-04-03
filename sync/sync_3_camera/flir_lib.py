@@ -486,7 +486,7 @@ class FlirCamera:
                     cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
 
         # 保存时间信息到 FLIR 目录
-        # np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
+        np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
         # np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
         time_data = {
             'exposure_times': exposure_times.tolist(),

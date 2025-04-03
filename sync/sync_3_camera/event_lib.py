@@ -104,7 +104,7 @@ class EventCamera:
             # 设置过滤类型为 STC_CUT_TRAIL
             event_trail_filter.set_type(I_EventTrailFilterModule.Type.STC_CUT_TRAIL)
             # 设置阈值
-            event_trail_filter.set_threshold(100000)  # 设置阈值为100000微秒
+            event_trail_filter.set_threshold(PROPHESEE_FILTER_THS)  # 设置阈值为100000微秒 PROPHESEE_FILTER_THS  = 10000
             # 启用过滤器
             event_trail_filter.enable(True)
             print("Event trail filter enabled.")

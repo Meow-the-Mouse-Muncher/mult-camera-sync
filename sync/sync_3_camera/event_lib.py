@@ -51,7 +51,7 @@ class EventCamera:
                 triggers = triggers[triggers['p'] == polarity].copy()
 
             try:
-                triggers = triggers[:NUM_IMAGES-1]
+                triggers = triggers[1:]
                 self._save_trigger_timestamps(triggers)
             except Exception as e:
                 print(f"触发信号处理失败: {e}")

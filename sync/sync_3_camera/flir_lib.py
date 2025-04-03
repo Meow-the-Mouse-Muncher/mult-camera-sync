@@ -48,9 +48,6 @@ class FlirCamera:
             # 配置白平衡
             self._set_white_balance(nodemap)
             
-            # 配置吞吐量
-            self._set_throughput(nodemap)
-            
             # 配置触发模式
             self._set_trigger(nodemap)
             
@@ -62,6 +59,9 @@ class FlirCamera:
             
             # 配置数据块模式
             self._enable_chunk_data(nodemap)
+
+            # 配置吞吐量
+            self._set_throughput(nodemap)
             
             return True
             
@@ -483,8 +483,7 @@ class FlirCamera:
                         pattern_key = (FLIR_OFFSET_X % 2, FLIR_OFFSET_Y % 2)
                         rgb_image = cv.cvtColor(img_data, bayer_patterns[pattern_key])
                     
-                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), 
-                             cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
+                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
 
         # 保存时间信息到 FLIR 目录
         # np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)

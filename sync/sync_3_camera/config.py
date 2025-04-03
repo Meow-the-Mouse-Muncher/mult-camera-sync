@@ -27,7 +27,7 @@ THERMAL_FPS = FLIR_FRAMERATE  # 与FLIR相机保持相同帧率
 THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 
 # Prophesee事件相机配置
-PROPHESEE_FILTER_THS = 100000  # Length of the time window for filtering (in us)
+PROPHESEE_FILTER_THS = 10e3  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = True  # If true, after an event goes through, it removes all events until change of polarity
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60

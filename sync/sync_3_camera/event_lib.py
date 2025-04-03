@@ -44,14 +44,11 @@ class EventCamera:
             
         if len(triggers) > 0:
             print(f"总触发信号数量: {len(triggers)}")
-            print(f"首个触发: p={triggers['p'][0]}, t={triggers['t'][0]}")
-            print(f"末个触发: p={triggers['p'][-1]}, t={triggers['t'][-1]}")
 
             if polarity in (0, 1):
                 triggers = triggers[triggers['p'] == polarity].copy()
-
+            print(f"需要保存触发信号数量: {len(triggers)}")
             try:
-                triggers = triggers[1:]
                 self._save_trigger_timestamps(triggers)
             except Exception as e:
                 print(f"触发信号处理失败: {e}")

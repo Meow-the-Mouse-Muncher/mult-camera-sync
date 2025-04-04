@@ -90,7 +90,8 @@ class EventCamera:
         self.ieventstream = self.device.get_i_events_stream()
         
         # 配置ROI
-        self._config_roi()
+        if PROPHESEE_Digital_Crop:
+            self._config_roi()
         
         # 假设 device 是已初始化的设备对象
         event_trail_filter = self.device.get_i_event_trail_filter_module()

@@ -10,8 +10,8 @@ FLIR_EX_TRIGGER = True  # 触发方式设置
 # FLIR相机分辨率和裁剪设置
 FLIR_ORIGIN_WIDTH = 2448   # 原始宽度
 FLIR_ORIGIN_HEIGHT = 2048  # 原始高度
-FLIR_WIDTH = 1800         # 裁剪后宽度
-FLIR_HEIGHT = 1800        # 裁剪后高度
+FLIR_WIDTH = 2448         # 裁剪后宽度
+FLIR_HEIGHT = 2048        # 裁剪后高度
 # 计算居中偏移量
 FLIR_OFFSET_X = (FLIR_ORIGIN_WIDTH - FLIR_WIDTH) // 2   # 水平偏移量
 FLIR_OFFSET_Y = (FLIR_ORIGIN_HEIGHT - FLIR_HEIGHT) // 2 # 垂直偏移量
@@ -29,11 +29,11 @@ THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 # Prophesee事件相机配置
 PROPHESEE_FILTER_THS = 100000  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = True  # If true, after an event goes through, it removes all events until change of polarity
+PROPHESEE_Digital_Crop = False  # If true, crop the image to the ROI 
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
-
 # 触发配置
 NUM_IMAGES = 10 + 1  # number of images to save (+1 because prophesee first trigger is incomplete)
 # 串口配置

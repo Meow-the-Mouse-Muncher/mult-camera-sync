@@ -40,7 +40,8 @@ class FlirCamera:
             self._set_pixel_format(nodemap)
             
             # 配置ROI
-            self._set_roi(nodemap)
+            if FLIR_CROP_ENABLE:
+                self._set_roi(nodemap)
             
             # 配置曝光
             self._set_exposure(nodemap)

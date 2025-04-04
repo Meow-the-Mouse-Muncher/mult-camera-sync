@@ -10,8 +10,9 @@ FLIR_EX_TRIGGER = True  # 触发方式设置
 # FLIR相机分辨率和裁剪设置
 FLIR_ORIGIN_WIDTH = 2448   # 原始宽度
 FLIR_ORIGIN_HEIGHT = 2048  # 原始高度
-FLIR_WIDTH = 2448         # 裁剪后宽度
-FLIR_HEIGHT = 2048        # 裁剪后高度
+FLIR_CROP_ENABLE = False  # 是否裁剪
+FLIR_WIDTH = 1800         # 裁剪后宽度
+FLIR_HEIGHT = 1800        # 裁剪后高度
 # 计算居中偏移量
 FLIR_OFFSET_X = (FLIR_ORIGIN_WIDTH - FLIR_WIDTH) // 2   # 水平偏移量
 FLIR_OFFSET_Y = (FLIR_ORIGIN_HEIGHT - FLIR_HEIGHT) // 2 # 垂直偏移量

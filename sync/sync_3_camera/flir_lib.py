@@ -33,6 +33,9 @@ class FlirCamera:
     def config_camera(self, nodemap):
         """配置相机参数"""
         try:
+            # 配置吞吐量
+            self._set_throughput(nodemap)
+
             # 配置像素格式
             self._set_pixel_format(nodemap)
             
@@ -59,9 +62,6 @@ class FlirCamera:
             
             # 配置数据块模式
             self._enable_chunk_data(nodemap)
-
-            # 配置吞吐量
-            self._set_throughput(nodemap)
             
             return True
             

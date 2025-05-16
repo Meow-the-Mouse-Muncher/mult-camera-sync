@@ -5,6 +5,7 @@ import os
 from threading import Thread
 import signal
 from config import *
+import time
 from event_lib import *
 from flir_lib import FlirCamera
 from thermal_lib import ThermalCamera
@@ -88,7 +89,7 @@ def main():
             print("红外相机初始化失败")
             return False
         print("红外相机初始化成功")
-
+        # time.sleep(3)  # 等待相机稳定
         # 配置红外相机
         if not thermal_cam.configure_camera(THERMAL_TEMP_SEGMENT, NUM_IMAGES, save_path):
             print("红外相机配置失败")

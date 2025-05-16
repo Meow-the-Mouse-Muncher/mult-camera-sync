@@ -71,6 +71,8 @@ class ThermalCamera:
             self.captured_count += 1
         
         if self.captured_count >= self.target_count:
+            print(f"已采集 {self.captured_count} 张图像")
+            print("开始处理图像...")
             self.is_capturing = False
             self.is_processing = True  # 标记开始处理
             self.process_thread = threading.Thread(target=self.process_frames)
@@ -106,11 +108,15 @@ class ThermalCamera:
             """配置红外相机
             Args:
                 temp_segment: 温度段
-                frame_count: 需要采集的帧数
+                frame_count: 需要采集的总帧数 (第一帧将被丢弃，实际保存 frame_count - 1 帧)
                 save_path: 保存路径
             """
             if not self.is_connected:
                 print("相机未连接，无法配置")
+                return False
+            
+            if frame_count < 0:
+                print("请求采集的帧数不能为负")
                 return False
                 
             # 设置温度段和校准
@@ -119,17 +125,21 @@ class ThermalCamera:
             
             # 分配帧缓存
             self.frame_buffer.clear()
-            for _ in range(frame_count):
+            for _ in range(frame_count): # 仍然分配 frame_count 个缓存，因为都需要采集
                 frame = Frame()
                 self.frame_buffer.append(frame)
             
-            self.target_count = frame_count
+            self.target_count = frame_count # target_count 是计划采集的总帧数
             
             # 更新保存路径
             if save_path:
                 self.base_dir = save_path
             
-            print("红外相机配置成功")
+            if frame_count > 0:
+                frames_to_be_saved = max(0, frame_count - 1)
+                print(f"红外相机配置成功。将尝试采集 {frame_count} 帧，预计保存 {frames_to_be_saved} 帧 (丢弃第一帧后)。")
+            else: # frame_count == 0
+                print(f"红外相机配置成功。请求采集 0 帧，将不保存任何图像。")
             return True
     def start_capture(self):
         """开始采集图像"""
@@ -149,37 +159,58 @@ class ThermalCamera:
 
     def process_frames(self):
         """处理采集的帧"""
-        frames_to_process = min(self.captured_count, self.target_count)
+        frames_actually_captured = min(self.captured_count, self.target_count)
         
         # 使用主程序传入的保存路径
         save_dir = os.path.join(self.base_dir, 'thermal')
         os.makedirs(save_dir, exist_ok=True)
         
-        # 保存采集信息
-        with open(os.path.join(save_dir, 'capture_info.txt'), 'w') as f:
-            f.write(f"采集时间: {time.strftime('%Y-%m-%d_%H.%M.%S')}\n")
-            f.write(f"采集帧率: {THERMAL_FPS} fps\n")
-            f.write(f"温度段: {THERMAL_TEMP_SEGMENT}\n")
-            f.write(f"图像尺寸: {THERMAL_WIDTH}x{THERMAL_HEIGHT}\n")
-            f.write(f"实际采集帧数: {frames_to_process}\n")
+        num_frames_to_save = 0
+        if frames_actually_captured <= 1:
+            print(f"实际采集 {frames_actually_captured} 帧。按要求丢弃第一帧后，无图像可保存。")
+            num_frames_to_save = 0
+        else:
+            num_frames_to_save = frames_actually_captured - 1
         
-        for i in range(frames_to_process):
-            frame = self.frame_buffer[i]
-            gray_path = os.path.join(save_dir, f'gray_{i:04d}.jpg')
-            rgb_path = os.path.join(save_dir, f'rgb_{i:04d}.jpg')
+        # # 保存采集信息
+        # with open(os.path.join(save_dir, 'capture_info.txt'), 'w') as f:
+        #     f.write(f"采集时间: {time.strftime('%Y-%m-%d_%H.%M.%S')}\n")
+        #     f.write(f"采集帧率: {THERMAL_FPS} fps\n")
+        #     f.write(f"温度段: {THERMAL_TEMP_SEGMENT}\n")
+        #     f.write(f"图像尺寸: {THERMAL_WIDTH}x{THERMAL_HEIGHT}\n")
+        #     f.write(f"请求采集总帧数: {self.target_count}\n")
+        #     f.write(f"实际回调捕获帧数: {self.captured_count}\n")
+        #     f.write(f"用于处理的捕获帧数: {frames_actually_captured}\n")
+        #     f.write(f"实际保存帧数 (丢弃第一帧后): {num_frames_to_save}\n")
+        
+        if num_frames_to_save > 0:
+            for i in range(num_frames_to_save):
+                # 要保存的帧在原始捕获序列中是第 i+1 帧 (跳过第0帧)
+                frame_buffer_index = i + 1 
+                
+                frame = self.frame_buffer[frame_buffer_index]
+                gray_path = os.path.join(save_dir, f'gray_{i:04d}.jpg') # 保存的文件名从 0 开始
+                # rgb_path = os.path.join(save_dir, f'rgb_{i:04d}.jpg') # 保存的文件名从 0 开始
+                
+                sdk_frame2gray(byref(frame), byref(self.gray))
+                gray_array = np.frombuffer(self.gray, dtype=np.uint16)
+                gray_array = gray_array.reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
+                
+                min_val = gray_array.min()
+                max_val = gray_array.max()
+                if max_val == min_val: # 防止除以零
+                    gray_array_normalized = np.zeros_like(gray_array, dtype=np.uint8)
+                else:
+                    gray_array_normalized = ((gray_array - min_val) * (255.0 / (max_val - min_val))).astype(np.uint8)
+                
+                gray_img = Image.fromarray(gray_array_normalized)
+                gray_img.save(gray_path)
+                
+                # sdk_gray2rgb(byref(self.gray), byref(self.rgb), self.imgsize[1], self.imgsize[0], 0, 1)
+                # rgb_pathbytes = str.encode(rgb_path)
+                # sdk_saveframe2jpg(rgb_pathbytes, frame, self.rgb)
             
-            sdk_frame2gray(byref(frame), byref(self.gray))
-            gray_array = np.frombuffer(self.gray, dtype=np.uint16)
-            gray_array = gray_array.reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
-            gray_array = ((gray_array - gray_array.min()) * (255.0 / (gray_array.max() - gray_array.min()))).astype(np.uint8)
-            gray_img = Image.fromarray(gray_array)
-            gray_img.save(gray_path)
-            
-            # sdk_gray2rgb(byref(self.gray), byref(self.rgb), self.imgsize[1], self.imgsize[0], 0, 1)
-            # rgb_pathbytes = str.encode(rgb_path)
-            # sdk_saveframe2jpg(rgb_pathbytes, frame, self.rgb)
-            
-        print(f"已完成 {frames_to_process} 张图像的处理")
+        print(f"已完成 {num_frames_to_save} 张图像的处理和保存。")
 
     def stop_capture(self):
         """停止采集"""

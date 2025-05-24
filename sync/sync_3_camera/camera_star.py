@@ -159,7 +159,6 @@ class CameraStar:
             ip.IPAddr[i] = str_ip_as_bytes[i]
         ip.DataPort = port
         ip.isValid = 1
-        
         sdk_creat_connect(self.handle, ip, self.callback, None)
         time.sleep(1)
         

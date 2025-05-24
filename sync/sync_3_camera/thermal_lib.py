@@ -14,6 +14,7 @@ class ThermalCamera:
         """初始化相机参数"""
         self.handle = 0
         self.is_connected = False
+        self.last_callback_time = None
         
         # 图像相关参数
         self.imgsize = [THERMAL_HEIGHT, THERMAL_WIDTH]
@@ -78,7 +79,7 @@ class ThermalCamera:
             self.process_thread = threading.Thread(target=self.process_frames)
             self.process_thread.start()
         return 0
-
+    
     def connect(self, ip_address=None, port=None):
         """连接相机"""
         ip_address = ip_address or THERMAL_CAMERA_IP
@@ -122,6 +123,7 @@ class ThermalCamera:
             # 设置温度段和校准
             self.set_temp_segment(temp_segment)
             self.calibration()
+            self.calisw(1)  # 设置自动校正开关
             
             # 分配帧缓存
             self.frame_buffer.clear()
@@ -228,13 +230,19 @@ class ThermalCamera:
         """快门补偿"""
         if self.is_connected:
             sdk_calibration(self.handle)
+            
+    def calisw(self, sw):
+        """设置自动校正开关"""
+        if self.is_connected:
+            sdk_setcaliSw(self.handle, sw)
 
     def wait_for_completion(self):
         """等待采集和处理完成"""
         # 等待采集完成
         while self.is_capturing:
-            time.sleep(0.1)
+            # time.sleep(0.04)
             print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
+            pass
         
         # 等待处理完成
         if self.is_processing and self.process_thread:

@@ -4,10 +4,36 @@ import os
 import numpy as np
 from datetime import datetime
 from ctypes import *
-from queue import Queue
+import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from config import *
 from PIL import Image
+
+# 全局SDK状态管理
+_sdk_initialized = False
+_sdk_lock = threading.Lock()
+
+def ensure_sdk_initialized():
+    """确保SDK已初始化"""
+    global _sdk_initialized
+    with _sdk_lock:
+        if not _sdk_initialized:
+            sdk_init()
+            _sdk_initialized = True
+            print("红外SDK已初始化")
+
+def ensure_sdk_cleanup():
+    """确保SDK已清理"""
+    global _sdk_initialized
+    with _sdk_lock:
+        if _sdk_initialized:
+            try:
+                sdk_quit()
+                _sdk_initialized = False
+                print("红外SDK已清理")
+            except Exception as e:
+                print(f"清理红外SDK时出错: {e}")
 
 class ThermalCamera:
     def __init__(self):
@@ -28,8 +54,12 @@ class ThermalCamera:
         self.target_count = 0
         self.captured_count = 0
         
-        # 处理线程
-        self.process_thread = None
+        # 异步处理
+        self.executor = ThreadPoolExecutor(max_workers=3)  # 增加worker数量：1个拷贝，2个图像处理
+        self.frame_queue = queue.Queue(maxsize=200)  # 帧数据队列
+        self.copy_future = None
+        self.process_future = None
+        self.is_processing = False
         self.mutex = threading.Lock()
         
         # IP地址初始化
@@ -44,8 +74,8 @@ class ThermalCamera:
         if not os.path.exists(self.base_dir):
             os.makedirs(self.base_dir)
             
-        # 初始化SDK
-        sdk_init()
+        # 初始化SDK（使用全局管理）
+        ensure_sdk_initialized()
         sdk_setIPAddrArray(self.ip_addr_array)
         
         # 初始化帧处理
@@ -55,29 +85,27 @@ class ThermalCamera:
         # 设置回调函数
         VIDEOCALLBACKFUNC = CFUNCTYPE(c_int, c_void_p, c_void_p)
         self.callback = VIDEOCALLBACKFUNC(self.frame_callback)
-        
-        self.is_processing = False  # 添加处理状态标志
 
     def frame_callback(self, frame, this):
-        """帧数据回调处理"""
-        if not self.is_capturing:
+        """帧数据回调处理 - 修复版本，避免队列不匹配"""
+        if not self.is_capturing or self.captured_count >= self.target_count:
             return 0
-            
-        if self.captured_count >= self.target_count:
-            return 0
-            
-        # bytebuf = string_at(frame, self.frame_size)
-        # with self.mutex:
-            # memmove(addressof(self.frame_buffer[self.captured_count]), bytebuf, self.frame_size)
-        self.captured_count += 1
         
-        if self.captured_count >= self.target_count:
-            print(f"已采集 {self.captured_count} 张图像")
-            print("开始处理图像...")
-            self.is_capturing = False
-            self.is_processing = True  # 标记开始处理
-            self.process_thread = threading.Thread(target=self.process_frames)
-            self.process_thread.start()
+        try:
+            # 直接将frame指针和索引放入队列，避免在回调中进行数据拷贝
+            # 这样可以最大限度减少回调函数的执行时间
+            frame_index = self.captured_count
+            self.frame_queue.put_nowait((frame, frame_index))
+            # 只有成功放入队列后才增加计数
+            self.captured_count += 1
+            if self.captured_count >= self.target_count:
+                self.is_capturing = False
+                
+        except queue.Full:
+            # 性能优化：队列满时不打印警告，避免影响回调速度
+            # 如果队列满了，不增加captured_count，这样保证队列任务数和计数匹配
+            pass
+            
         return 0
     
     def connect(self, ip_address=None, port=None):
@@ -123,7 +151,7 @@ class ThermalCamera:
             # 设置温度段和校准
             self.set_temp_segment(temp_segment)
             self.calibration()
-            self.calisw(0)  # 设置自动校正开关
+            self.calisw(1)  # 设置自动校正开关
             
             # 分配帧缓存
             self.frame_buffer.clear()
@@ -144,7 +172,7 @@ class ThermalCamera:
                 print(f"红外相机配置成功。请求采集 0 帧，将不保存任何图像。")
             return True
     def start_capture(self):
-        """开始采集图像"""
+        """开始采集图像 - 异步版本"""
         if not self.is_connected:
             print("相机未连接")
             return False
@@ -152,15 +180,137 @@ class ThermalCamera:
         if not self.frame_buffer:
             print("未配置帧缓存")
             return False
-            
+        
+        # 清空队列
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+                # 注意：这里不调用task_done，因为这些是旧的任务
+            except queue.Empty:
+                break
+        
+        # 重置状态
         self.captured_count = 0
         self.is_capturing = True
-        self.is_processing = False  # 重置处理状态
+        self.is_processing = False
+        
+        # 重置futures
+        self.copy_future = None
+        self.process_future = None
+        
+        # 启动异步数据拷贝 - 在设置is_capturing=True之后
+        self.copy_future = self.executor.submit(self._async_copy_worker)
+        
         print(f"开始采集 {self.target_count} 张图像")
         return True
+    
+    def _async_copy_worker(self):
+        """异步数据拷贝工作线程 - 优化版本，移除调试信息"""
+        processed_count = 0
+        max_wait_time = 30  # 最大等待时间30秒
+        start_time = time.time()
+        
+        # 等待采集真正开始或有数据进入队列
+        while self.is_capturing and self.frame_queue.empty() and (time.time() - start_time) < 5:
+            time.sleep(0.1)  # 等待采集开始
+        
+        while self.is_capturing or not self.frame_queue.empty():
+            try:
+                # 从队列获取frame指针和索引
+                frame_ptr, frame_index = self.frame_queue.get(timeout=1.0)
+                
+                # 在工作线程中进行数据拷贝，避免阻塞回调
+                try:
+                    bytebuf = string_at(frame_ptr, self.frame_size)
+                    frame_data = bytes(bytebuf)  # 创建数据副本
+                    
+                    # 拷贝到frame_buffer
+                    with self.mutex:
+                        if frame_index < len(self.frame_buffer):
+                            memmove(addressof(self.frame_buffer[frame_index]), frame_data, len(frame_data))
+                            processed_count += 1
+                            
+                except Exception as e:
+                    # 性能优化：只记录严重错误，避免频繁打印
+                    pass
+                finally:
+                    # 确保无论成功失败都调用task_done
+                    self.frame_queue.task_done()
+                
+            except queue.Empty:
+                # 如果队列空了但还在采集，继续等待
+                if self.is_capturing:
+                    continue
+                # 如果不在采集且队列空了，检查是否超时
+                if time.time() - start_time > max_wait_time:
+                    # 数据拷贝线程等待超时，退出
+                    break
+                continue
+            except Exception as e:
+                # 性能优化：减少错误打印
+                # 如果从队列获取数据成功但处理失败，也需要调用task_done
+                try:
+                    self.frame_queue.task_done()
+                except:
+                    pass
+        
+        # 数据拷贝线程完成，处理了指定数量的帧
+    
+    def wait_for_completion(self):
+        """等待采集和处理完成 - 优化版本"""
+        # 等待采集完成，简化进度显示
+        wait_start_time = time.time()
+        
+        while self.is_capturing:
+            time.sleep(0.5)  # 每0.5秒检查一次
+            
+            # 检查是否超时 (30秒)
+            if time.time() - wait_start_time > 30:
+                print("红外相机采集超时！强制停止")
+                self.is_capturing = False
+                break
+        
+        print(f"红外相机采集完成: {self.captured_count}/{self.target_count}")
+        
+        # 等待数据拷贝完成
+        if self.copy_future:
+            try:
+                self.copy_future.result(timeout=10)  # 10秒超时
+            except Exception as e:
+                print(f"数据拷贝超时或出错: {e}")
+        
+        # 等待队列处理完成，使用join方法而不是检查队列大小
+        try:
+            # 使用join方法等待所有任务完成，设置超时
+            self.frame_queue.join()  # 这里会等待所有put的项目都被task_done
+        except Exception as e:
+            print(f"队列join出错: {e}")
+            # 如果join失败，清空剩余队列
+            while not self.frame_queue.empty():
+                try:
+                    self.frame_queue.get_nowait()
+                    self.frame_queue.task_done()
+                except:
+                    break
+        
+        # 异步开始图像处理
+        if not self.is_processing and self.captured_count > 0:
+            print("开始处理红外图像...")
+            self.is_processing = True
+            self.process_future = self.executor.submit(self.process_frames)
+        
+        # 等待处理完成
+        if self.process_future:
+            try:
+                result = self.process_future.result(timeout=120)  # 增加到120秒超时
+                print(f"红外图像处理完成，处理了 {result} 张图像")
+            except TimeoutError:
+                print("红外图像处理超时！")
+            except Exception as e:
+                print(f"图像处理出错: {e}")
 
     def process_frames(self):
-        """处理采集的帧"""
+        """处理采集的帧 - 优化版本，支持并行处理"""
         frames_actually_captured = min(self.captured_count, self.target_count)
         
         # 使用主程序传入的保存路径
@@ -170,56 +320,84 @@ class ThermalCamera:
         num_frames_to_save = 0
         if frames_actually_captured <= 1:
             print(f"实际采集 {frames_actually_captured} 帧。按要求丢弃第一帧后，无图像可保存。")
-            num_frames_to_save = 0
+            return
         else:
             num_frames_to_save = frames_actually_captured - 1
         
-        # # 保存采集信息
-        # with open(os.path.join(save_dir, 'capture_info.txt'), 'w') as f:
-        #     f.write(f"采集时间: {time.strftime('%Y-%m-%d_%H.%M.%S')}\n")
-        #     f.write(f"采集帧率: {THERMAL_FPS} fps\n")
-        #     f.write(f"温度段: {THERMAL_TEMP_SEGMENT}\n")
-        #     f.write(f"图像尺寸: {THERMAL_WIDTH}x{THERMAL_HEIGHT}\n")
-        #     f.write(f"请求采集总帧数: {self.target_count}\n")
-        #     f.write(f"实际回调捕获帧数: {self.captured_count}\n")
-        #     f.write(f"用于处理的捕获帧数: {frames_actually_captured}\n")
-        #     f.write(f"实际保存帧数 (丢弃第一帧后): {num_frames_to_save}\n")
+        print(f"开始处理 {num_frames_to_save} 张红外图像...")
         
-        if num_frames_to_save > 0:
-            for i in range(num_frames_to_save):
-                # 要保存的帧在原始捕获序列中是第 i+1 帧 (跳过第0帧)
-                frame_buffer_index = i + 1 
-                
-                frame = self.frame_buffer[frame_buffer_index]
-                gray_path = os.path.join(save_dir, f'gray_{i:04d}.jpg') # 保存的文件名从 0 开始
-                # rgb_path = os.path.join(save_dir, f'rgb_{i:04d}.jpg') # 保存的文件名从 0 开始
-                
-                sdk_frame2gray(byref(frame), byref(self.gray))
-                gray_array = np.frombuffer(self.gray, dtype=np.uint16)
-                gray_array = gray_array.reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
-                
-                min_val = gray_array.min()
-                max_val = gray_array.max()
-                if max_val == min_val: # 防止除以零
-                    gray_array_normalized = np.zeros_like(gray_array, dtype=np.uint8)
-                else:
-                    gray_array_normalized = ((gray_array - min_val) * (255.0 / (max_val - min_val))).astype(np.uint8)
-                
-                gray_img = Image.fromarray(gray_array_normalized)
-                gray_img.save(gray_path)
-                
-                # sdk_gray2rgb(byref(self.gray), byref(self.rgb), self.imgsize[1], self.imgsize[0], 0, 1)
-                # rgb_pathbytes = str.encode(rgb_path)
-                # sdk_saveframe2jpg(rgb_pathbytes, frame, self.rgb)
+        # 批量处理以提高效率
+        batch_size = 10  # 每批处理10张图像
+        process_start_time = time.time()
+        processed_count = 0
+        
+        for batch_start in range(0, num_frames_to_save, batch_size):
+            batch_end = min(batch_start + batch_size, num_frames_to_save)
+            batch_indices = list(range(batch_start, batch_end))
             
-        print(f"已完成 {num_frames_to_save} 张图像的处理和保存。")
+            # 并行处理当前批次
+            futures = []
+            for i in batch_indices:
+                future = self.executor.submit(self._process_single_frame, i, save_dir)
+                futures.append((i, future))
+            
+            # 等待当前批次完成
+            for i, future in futures:
+                try:
+                    success = future.result(timeout=30)  # 30秒超时
+                    if success:
+                        processed_count += 1
+                except Exception as e:
+                    # 性能优化：只记录处理失败的关键错误
+                    pass
+        
+        total_time = time.time() - process_start_time
+        print(f"红外图像处理完成! 共处理 {processed_count}/{num_frames_to_save} 张图像")
+        return processed_count  # 返回处理的图像数量
+    
+    def _process_single_frame(self, frame_index, save_dir):
+        """处理单个帧的工作函数"""
+        try:
+            # 要保存的帧在原始捕获序列中是第 frame_index+1 帧 (跳过第0帧)
+            frame_buffer_index = frame_index + 1 
+            
+            if frame_buffer_index >= len(self.frame_buffer):
+                # 性能优化：减少错误打印，只返回False
+                return False
+            
+            frame = self.frame_buffer[frame_buffer_index]
+            gray_path = os.path.join(save_dir, f'gray_{frame_index:04d}.jpg')
+            
+            # 转换为灰度图像
+            local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
+            sdk_frame2gray(byref(frame), byref(local_gray))
+            gray_array = np.frombuffer(local_gray, dtype=np.uint16)
+            gray_array = gray_array.reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
+            
+            # 归一化到0-255范围
+            min_val = gray_array.min()
+            max_val = gray_array.max()
+            if max_val == min_val:  # 防止除以零
+                gray_array_normalized = np.zeros_like(gray_array, dtype=np.uint8)
+            else:
+                gray_array_normalized = ((gray_array - min_val) * (255.0 / (max_val - min_val))).astype(np.uint8)
+            
+            # 保存图像
+            gray_img = Image.fromarray(gray_array_normalized)
+            gray_img.save(gray_path, optimize=True, quality=95)  # 添加质量参数
+            
+            return True
+            
+        except Exception as e:
+            # 性能优化：减少错误打印和traceback
+            return False
 
     def stop_capture(self):
         """停止采集"""
         self.is_capturing = False
-        if self.process_thread:
-            self.process_thread.join()
-        print(f"已停止采集，共采集了 {self.captured_count} 张图像")
+        if self.process_future:
+            self.process_future.result()
+        # 停止采集，共采集了指定数量张图像
 
     def set_temp_segment(self, index):
         """设置温度段"""
@@ -236,27 +414,55 @@ class ThermalCamera:
         if self.is_connected:
             sdk_setcaliSw(self.handle, sw)
 
-    def wait_for_completion(self):
-        """等待采集和处理完成"""
-        # 等待采集完成
-        # while self.is_capturing:
-        #     # time.sleep(0.04)
-        #     print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
-        #     pass
-        print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
-        while self.is_capturing:
-            # time.sleep(0.04)
-            # print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
-            pass
-        # 等待处理完成
-        if self.is_processing and self.process_thread:
-            print("等红外图像处理完成...")
-            self.process_thread.join()
-            self.is_processing = False
-            print("红外图像处理完成")
-
     def cleanup(self):
-        """清理相机资源"""
+        """清理相机资源 - 优化版本"""
+        print("正在清理红外相机资源...")
+        
+        # 停止采集
+        self.is_capturing = False
+        
+        # 等待并清理线程池
+        if hasattr(self, 'executor') and self.executor:
+            try:
+                # 等待正在执行的任务完成
+                if self.copy_future and not self.copy_future.done():
+                    try:
+                        self.copy_future.result(timeout=5)
+                    except Exception:
+                        pass
+                if self.process_future and not self.process_future.done():
+                    try:
+                        self.process_future.result(timeout=10)
+                    except Exception:
+                        pass
+                    
+                # 关闭线程池
+                self.executor.shutdown(wait=True)
+            except Exception as e:
+                # 清理线程池时可能出错，但不影响主要流程
+                pass
+        
+        # 清空队列
+        try:
+            while not self.frame_queue.empty():
+                try:
+                    self.frame_queue.get_nowait()
+                    self.frame_queue.task_done()
+                except:
+                    break
+        except:
+            pass
+        
+        # 断开相机连接
         if self.is_connected:
-            sdk_stop(self.handle)
-        sdk_quit()
+            try:
+                sdk_stop(self.handle)
+                self.is_connected = False
+            except Exception as e:
+                # 停止相机时出错，但不影响清理流程
+                pass
+        
+        # 注意：不要调用 sdk_quit()，因为这是全局的，可能影响下次初始化
+        # 只在程序完全退出时才调用 sdk_quit()
+            
+        print("红外相机资源清理完成")

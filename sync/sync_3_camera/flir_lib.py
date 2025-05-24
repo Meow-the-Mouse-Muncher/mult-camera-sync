@@ -3,7 +3,6 @@ import numpy as np
 import cv2 as cv
 import os
 from config import *
-import json
 
 class FlirCamera:
     """FLIR相机控制类"""
@@ -73,18 +72,17 @@ class FlirCamera:
     def _set_pixel_format(self, nodemap):
         """设置像素格式为BayerRG8"""
         try:
-            node_pixel_format = PySpin.CEnumerationPtr(nodemap.GetNode('PixelFormat'))
-            if not PySpin.IsAvailable(node_pixel_format) or not PySpin.IsWritable(node_pixel_format):
-                print('像素格式节点不可用')
-                return
 
-            # 设置为BayerRG8格式
-            node_pixel_format_bayer = node_pixel_format.GetEntryByName('BayerRG8')
-            if PySpin.IsReadable(node_pixel_format_bayer):
-                pixel_format_bayer = node_pixel_format_bayer.GetValue()
-                node_pixel_format.SetIntValue(pixel_format_bayer)
-            else:
-                print('BayerRG8格式不可用')
+            node_pixel_format = PySpin.CEnumerationPtr(nodemap.GetNode('PixelFormat'))
+            if PySpin.IsAvailable(node_pixel_format) and PySpin.IsWritable(node_pixel_format):
+                node_pixel_format_BayerRG8 = PySpin.CEnumEntryPtr(node_pixel_format.GetEntryByName('BayerRG8'))
+                if PySpin.IsReadable(node_pixel_format_BayerRG8):
+                    pixel_format_BayerRG8 = node_pixel_format_BayerRG8.GetValue()
+                    node_pixel_format.SetIntValue(pixel_format_BayerRG8)
+                else:
+                    print('BayerRG8格式不可用')
+                node_pixel_format = PySpin.CEnumerationPtr(nodemap.GetNode('PixelFormat'))
+
         except PySpin.SpinnakerException as ex:
             print(f'设置像素格式错误: {ex}')
 
@@ -413,7 +411,6 @@ class FlirCamera:
         """
         try:
             images = np.empty((NUM_IMAGES, FLIR_HEIGHT, FLIR_WIDTH), dtype=np.uint8)
-            timestamps = np.zeros(NUM_IMAGES, dtype=np.uint64)
             exposure_times = np.zeros(NUM_IMAGES, dtype=float)
             
             for i in range(NUM_IMAGES):
@@ -426,13 +423,13 @@ class FlirCamera:
                     continue
                 
                 images[i] = image_result.GetNDArray()
-                _, exposure_times[i], timestamps[i] = self.read_chunk_data(image_result)
+                _, exposure_times[i] = self.read_chunk_data(image_result)
                 image_result.Release()
             
             cam.EndAcquisition()
             ACQUISITION_FLAG.value = 1  # 使用 .value 访问共享变量
             # 只保存有效图像！！！！
-            self._save_data(images[1:], exposure_times[1:], timestamps, path)
+            self._save_data(images[1:], exposure_times[1:], path)
             
             # 添加重置
             self._disable_chunk_data(nodemap)
@@ -445,12 +442,11 @@ class FlirCamera:
             RUNNING.value = 0
             return False
 
-    def _save_data(self, images, exposure_times, timestamps, path):
+    def _save_data(self, images, exposure_times, path):
         """保存采集数据
         Args:
             images: 图像数据
             exposure_times: 曝光时间
-            timestamps: 时间戳
             path: 保存路径
         """
         # 创建 FLIR 数据目录
@@ -486,29 +482,22 @@ class FlirCamera:
                     
                     cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
 
-        # 保存时间信息到 FLIR 目录
+        # 只保存曝光时间，不保存时间戳
         np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
-        # np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
-        time_data = {
-            'exposure_times': exposure_times.tolist(),
-            'timestamps': timestamps.tolist()
-        }
-        with open(os.path.join(flir_dir, 'timing.json'), 'w') as f:
-            json.dump(time_data, f, indent=4)
 
     def read_chunk_data(self, image):
         """读取图像块数据
         Args:
             image: 图像对象
         Returns:
-            tuple: (成功标志, 曝光时间, 时间戳)
+            tuple: (成功标志, 曝光时间)
         """
         try:
             chunk_data = image.GetChunkData()
-            return True, chunk_data.GetExposureTime(), chunk_data.GetTimestamp()
+            return True, chunk_data.GetExposureTime()
         except PySpin.SpinnakerException as ex:
             print(f'数据块读取错误: {ex}')
-            return False, 0, 0
+            return False, 0
 
     def cleanup(self):
         """清理相机资源"""

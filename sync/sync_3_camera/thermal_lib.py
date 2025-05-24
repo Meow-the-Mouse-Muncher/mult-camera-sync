@@ -66,10 +66,10 @@ class ThermalCamera:
         if self.captured_count >= self.target_count:
             return 0
             
-        bytebuf = string_at(frame, self.frame_size)
-        with self.mutex:
-            memmove(addressof(self.frame_buffer[self.captured_count]), bytebuf, self.frame_size)
-            self.captured_count += 1
+        # bytebuf = string_at(frame, self.frame_size)
+        # with self.mutex:
+            # memmove(addressof(self.frame_buffer[self.captured_count]), bytebuf, self.frame_size)
+        self.captured_count += 1
         
         if self.captured_count >= self.target_count:
             print(f"已采集 {self.captured_count} 张图像")
@@ -123,7 +123,7 @@ class ThermalCamera:
             # 设置温度段和校准
             self.set_temp_segment(temp_segment)
             self.calibration()
-            self.calisw(1)  # 设置自动校正开关
+            self.calisw(0)  # 设置自动校正开关
             
             # 分配帧缓存
             self.frame_buffer.clear()
@@ -239,11 +239,15 @@ class ThermalCamera:
     def wait_for_completion(self):
         """等待采集和处理完成"""
         # 等待采集完成
+        # while self.is_capturing:
+        #     # time.sleep(0.04)
+        #     print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
+        #     pass
+        print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
         while self.is_capturing:
             # time.sleep(0.04)
-            print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
+            # print(f"红外相机已采集 {self.captured_count}/{self.target_count} 张图像")
             pass
-        
         # 等待处理完成
         if self.is_processing and self.process_thread:
             print("等红外图像处理完成...")

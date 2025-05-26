@@ -1,5 +1,6 @@
 import PySpin
 import numpy as np
+import time
 import cv2 as cv
 import os
 from config import *
@@ -28,6 +29,183 @@ class FlirCamera:
             return True
         else:
             return False
+
+    def configure_camera(self, cam, nodemap):
+        """配置相机参数"""
+        try:
+            # 停止采集
+            if cam.IsStreaming():
+                cam.EndAcquisition()
+        
+            # 配置缓冲区
+            try:
+                buffer_count_node = PySpin.CIntegerPtr(nodemap.GetNode("StreamBufferCountManual"))
+                if PySpin.IsAvailable(buffer_count_node) and PySpin.IsWritable(buffer_count_node):
+                    buffer_count_node.SetValue(FLIR_BUFFER_COUNT)
+            except Exception as e:
+                pass  # 某些相机可能不支持此配置
+            
+            # 配置触发模式
+            if FLIR_EX_TRIGGER:
+                trigger_mode = PySpin.CEnumerationPtr(nodemap.GetNode("TriggerMode"))
+                if PySpin.IsAvailable(trigger_mode) and PySpin.IsWritable(trigger_mode):
+                    trigger_mode_on = trigger_mode.GetEntryByName("On")
+                    trigger_mode.SetIntValue(trigger_mode_on.GetValue())
+                
+                trigger_source = PySpin.CEnumerationPtr(nodemap.GetNode("TriggerSource"))
+                if PySpin.IsAvailable(trigger_source) and PySpin.IsWritable(trigger_source):
+                    trigger_source_software = trigger_source.GetEntryByName("Software")
+                    trigger_source.SetIntValue(trigger_source_software.GetValue())
+            
+            # 配置曝光模式
+            exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
+            if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
+                if FLIR_AUTO_EXPOSURE:
+                    # 自动曝光模式
+                    exposure_auto_continuous = exposure_auto.GetEntryByName("Continuous")
+                    exposure_auto.SetIntValue(exposure_auto_continuous.GetValue())
+                    
+                    # 设置自动曝光参数
+                    try:
+                        # 设置曝光时间上限
+                        exposure_time_upper = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTimeUpperLimit"))
+                        if PySpin.IsAvailable(exposure_time_upper) and PySpin.IsWritable(exposure_time_upper):
+                            exposure_time_upper.SetValue(FLIR_AUTO_EXPOSURE_TIME_UPPER_LIMIT)
+                        
+                        # 设置曝光时间下限
+                        exposure_time_lower = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTimeLowerLimit"))
+                        if PySpin.IsAvailable(exposure_time_lower) and PySpin.IsWritable(exposure_time_lower):
+                            exposure_time_lower.SetValue(FLIR_AUTO_EXPOSURE_TIME_LOWER_LIMIT)
+                        
+                        # 设置目标灰度值
+                        target_grey_value = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTargetGreyValue"))
+                        if PySpin.IsAvailable(target_grey_value) and PySpin.IsWritable(target_grey_value):
+                            target_grey_value.SetValue(FLIR_AUTO_EXPOSURE_TARGET_GREY_VALUE)
+                    
+                    except Exception as e:
+                        pass  # 某些参数可能不被所有相机支持
+                else:
+                    # 手动曝光模式
+                    exposure_auto_off = exposure_auto.GetEntryByName("Off")
+                    exposure_auto.SetIntValue(exposure_auto_off.GetValue())
+                    
+                    # 设置固定曝光时间
+                    exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
+                    if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
+                        exposure_time.SetValue(FLIR_EXPOSURE_TIME)
+            
+            # 配置帧率
+            acquisition_framerate_enable = PySpin.CBooleanPtr(nodemap.GetNode("AcquisitionFrameRateEnable"))
+            if PySpin.IsAvailable(acquisition_framerate_enable) and PySpin.IsWritable(acquisition_framerate_enable):
+                acquisition_framerate_enable.SetValue(True)
+                
+                acquisition_framerate = PySpin.CFloatPtr(nodemap.GetNode("AcquisitionFrameRate"))
+                if PySpin.IsAvailable(acquisition_framerate) and PySpin.IsWritable(acquisition_framerate):
+                    # 在自动曝光模式下，使用较低的帧率以给自动曝光更多时间
+                    target_framerate = FLIR_FRAMERATE if not FLIR_AUTO_EXPOSURE else max(1, FLIR_FRAMERATE // 2)
+                    acquisition_framerate.SetValue(target_framerate)
+            
+            # 配置裁剪
+            if FLIR_CROP_ENABLE:
+                self._configure_crop(nodemap)
+            
+            # 配置吞吐量限制
+            device_link_throughput_limit = PySpin.CIntegerPtr(nodemap.GetNode("DeviceLinkThroughputLimit"))
+            if PySpin.IsAvailable(device_link_throughput_limit) and PySpin.IsWritable(device_link_throughput_limit):
+                device_link_throughput_limit.SetValue(FLIR_ThroughputLimit)
+            
+            return True
+            
+        except Exception as e:
+            return False
+
+    def capture_images(self, cam, nodemap, num_images):
+        """捕获图像 - 改进的缓冲区处理"""
+        try:
+            # 开始采集
+            cam.BeginAcquisition()
+            
+            images = {}
+            exposure_times = {}
+            timestamps = {}
+            
+            # 在自动曝光模式下，给相机一些时间来稳定曝光
+            if FLIR_AUTO_EXPOSURE:
+                time.sleep(1.0)  # 等待自动曝光稳定
+            
+            for i in range(num_images):
+                try:
+                    if FLIR_EX_TRIGGER:
+                        # 软件触发
+                        trigger_software = PySpin.CCommandPtr(nodemap.GetNode("TriggerSoftware"))
+                        if PySpin.IsAvailable(trigger_software):
+                            trigger_software.Execute()
+                    
+                    # 获取图像
+                    timeout = FLIR_IMAGE_TIMEOUT 
+                    image_result = cam.GetNextImage(timeout)
+                    
+                    if image_result.IsIncomplete():
+                        # 如果图像不完整，释放并继续
+                        image_result.Release()
+                        continue
+                    
+                    # 获取曝光时间
+                    exposure_time = 0
+                    try:
+                        exposure_time_node = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
+                        if PySpin.IsAvailable(exposure_time_node) and PySpin.IsReadable(exposure_time_node):
+                            exposure_time = exposure_time_node.GetValue()
+                    except:
+                        exposure_time = FLIR_EXPOSURE_TIME
+                    
+                    # 转换图像
+                    if FLIR_CROP_ENABLE:
+                        converted_image = image_result.Convert(PySpin.PixelFormat_Mono16, PySpin.HQ_LINEAR)
+                    else:
+                        converted_image = image_result.Convert(PySpin.PixelFormat_Mono16, PySpin.HQ_LINEAR)
+                    
+                    # 获取图像数据
+                    image_data = converted_image.GetNDArray()
+                    timestamp = image_result.GetTimeStamp()
+                    
+                    # 存储数据
+                    images[i] = image_data.copy()
+                    exposure_times[i] = exposure_time
+                    timestamps[i] = timestamp
+                    
+                    # 释放图像
+                    image_result.Release()
+                    converted_image.Release()
+                    
+                except PySpin.SpinnakerException as e:
+                    # 处理Spinnaker异常
+                    if "Failed waiting for EventData" in str(e):
+                        # 这是缓冲区事件等待超时，尝试清理缓冲区
+                        try:
+                            # 尝试获取并丢弃任何pending的图像
+                            while True:
+                                try:
+                                    pending_image = cam.GetNextImage(100)  # 短超时
+                                    pending_image.Release()
+                                except:
+                                    break
+                        except:
+                            pass
+                    continue
+                except Exception as e:
+                    continue
+            
+            cam.EndAcquisition()
+            return images, exposure_times, timestamps
+            
+        except Exception as e:
+            try:
+                if cam.IsStreaming():
+                    cam.EndAcquisition()
+            except:
+                pass
+            return {}, {}, {}
 
     def config_camera(self, nodemap):
         """配置相机参数"""
@@ -128,7 +306,7 @@ class FlirCamera:
             # 设置自动曝光上限
             node_exposure_time_upper_limit = PySpin.CFloatPtr(nodemap.GetNode('AutoExposureExposureTimeUpperLimit'))
             if PySpin.IsAvailable(node_exposure_time_upper_limit) and PySpin.IsWritable(node_exposure_time_upper_limit):
-                node_exposure_time_upper_limit.SetValue(5000000)
+                node_exposure_time_upper_limit.SetValue(100000)
 
             # 启用自动曝光
             node_exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode('ExposureAuto'))

@@ -136,9 +136,28 @@ def sdk_tempseg_sel(handle, i):
 
 
 # 转灰度
+# def sdk_frame2gray(frame, gray):
+#     dll.IRSDK_Frame2Gray(frame, gray, c_float(50), c_float(50), 0)
 def sdk_frame2gray(frame, gray):
-    dll.IRSDK_Frame2Gray(frame, gray, c_float(50), c_float(50), 0)
-
+    """
+    使用区间调光的灰度转换函数
+    
+    参数:
+    frame: 帧结构指针
+    gray: 灰度输出缓冲区
+    contrast: 对比度 (默认50.0)
+    brightness: 亮度 (默认50.0)
+    min_temp: 调光范围最低温阈值 (默认0.0，当min_temp与max_temp相等时为自动调光)
+    max_temp: 调光范围最高温阈值 (默认0.0)
+    temp_filter: 时域滤波系数 0~100，0是关闭，100时域滤波效果最强，建议1时效果较好 (默认0)
+    """
+    contrast=50.0
+    brightness=50.0
+    min_temp=65
+    max_temp=65
+    temp_filter=0
+    dll.IRSDK_FrameAgc(frame, gray, c_float(contrast), c_float(brightness), 
+                       c_float(min_temp), c_float(max_temp), None, 0, temp_filter)
 
 # 转rgb
 def sdk_gray2rgb(gray, rgb, w, h, paltype, pal):

@@ -1,11 +1,18 @@
 from multiprocessing import Value
 
 # FLIR相机配置参数
-FLIR_FRAMERATE = 20  # fps
-FLIR_EXPOSURE_TIME = 500  # us
+FLIR_FRAMERATE = 15  # fps
+FLIR_EXPOSURE_TIME = 1000  # us
 FLIR_BALANCE_WHITE = 1.6
-FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
+FLIR_AUTO_EXPOSURE = True  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
+# 缓冲区和超时配置
+FLIR_BUFFER_COUNT = 30           # 缓冲区数量
+FLIR_IMAGE_TIMEOUT = 1000        # 图像获取超时时间 (ms)
+# 自动曝光相关参数（当FLIR_AUTO_EXPOSURE=True时使用）
+FLIR_AUTO_EXPOSURE_TIME_UPPER_LIMIT = 100000  # 自动曝光时间上限 (us)
+FLIR_AUTO_EXPOSURE_TIME_LOWER_LIMIT = 10    # 自动曝光时间下限 (us)
+FLIR_AUTO_EXPOSURE_TARGET_GREY_VALUE = 50    # 自动曝光目标灰度值 (0-100)
 
 # FLIR相机分辨率和裁剪设置
 FLIR_ORIGIN_WIDTH = 2448   # 原始宽度
@@ -28,7 +35,7 @@ THERMAL_FPS = FLIR_FRAMERATE  # 与FLIR相机保持相同帧率
 THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 
 # Prophesee事件相机配置
-PROPHESEE_FILTER_THS = 50000  # Length of the time window for filtering (in us)
+PROPHESEE_FILTER_THS = 20000  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = True  # If true, after an event goes through, it removes all events until change of polarity
 PROPHESEE_Digital_Crop = True  # If true, crop the image to the ROI 
 PROPHESEE_ROI_X0 = 340
@@ -36,7 +43,7 @@ PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 150 + 1  # number of images to save (+1 because prophesee first trigger is incomplete) 100-200
+NUM_IMAGES = 5 + 1  # number of images to save (+1 because prophesee first trigger is incomplete) 100-200
 # 串口配置
 SERIAL_PORT = '/dev/ttyTHS1'
 SERIAL_BAUDRATE = 115200

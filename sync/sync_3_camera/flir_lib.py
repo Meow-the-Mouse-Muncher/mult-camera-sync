@@ -635,7 +635,7 @@ class FlirCamera:
         # 保存原始数据
         with open(os.path.join(flir_dir, "images.raw"), 'wb') as f:
             # 写入头信息
-            header = np.array([NUM_IMAGES, FLIR_OFFSET_X, FLIR_OFFSET_Y, 
+            header = np.array([NUM_IMAGES-1, FLIR_OFFSET_X, FLIR_OFFSET_Y, 
                              FLIR_WIDTH, FLIR_HEIGHT], dtype=np.int32)
             f.write(header.tobytes())
             

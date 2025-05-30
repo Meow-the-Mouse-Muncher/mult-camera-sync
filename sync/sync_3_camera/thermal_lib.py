@@ -87,8 +87,11 @@ class ThermalCamera:
         self.callback = VIDEOCALLBACKFUNC(self.frame_callback)
 
     def frame_callback(self, frame, this):
-        """帧数据回调处理 - 修复版本，避免队列不匹配"""
+        """帧数据回调处理 - 独立采集版本"""
+        # 只检查自身采集状态，不检查ACQUISITION_FLAG
         if not self.is_capturing or self.captured_count >= self.target_count:
+            if self.is_capturing and self.captured_count >= self.target_count:
+                self.is_capturing = False
             return 0
         
         try:
@@ -214,7 +217,7 @@ class ThermalCamera:
         while self.is_capturing and self.frame_queue.empty() and (time.time() - start_time) < 5:
             time.sleep(0.1)  # 等待采集开始
         
-        while self.is_capturing or not self.frame_queue.empty():
+        while (self.is_capturing or not self.frame_queue.empty()):
             try:
                 # 从队列获取frame指针和索引
                 frame_ptr, frame_index = self.frame_queue.get(timeout=1.0)
@@ -257,13 +260,11 @@ class ThermalCamera:
         # 数据拷贝线程完成，处理了指定数量的帧
     
     def wait_for_completion(self):
-        """等待采集和处理完成 - 优化版本"""
-        # 等待采集完成，简化进度显示
+        """等待采集和处理完成 - 独立采集版本"""
+        # 等待采集完成
         wait_start_time = time.time()
-        
         while self.is_capturing:
             time.sleep(0.5)  # 每0.5秒检查一次
-            
             # 检查是否超时 (30秒)
             if time.time() - wait_start_time > 30:
                 print("红外相机采集超时！强制停止")

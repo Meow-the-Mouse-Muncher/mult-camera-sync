@@ -1,7 +1,7 @@
 from multiprocessing import Value
 
 # FLIR相机配置参数
-FLIR_FRAMERATE = 15  # fps
+FLIR_FRAMERATE = 12  # fps
 FLIR_EXPOSURE_TIME = 100  # us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置

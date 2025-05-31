@@ -160,10 +160,10 @@ class AsyncCameraController:
                 print("FLIR相机配置成功")
                 
                 # 启动采集线程
+                self.executor.submit(self._thermal_capture_worker)
                 self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 self.executor.submit(self._prophesee_capture_worker)
-                self.executor.submit(self._thermal_capture_worker)
-                
+
                 # 短暂延时确保所有线程就绪
                 time.sleep(0.1)
                 

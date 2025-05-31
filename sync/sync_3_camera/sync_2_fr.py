@@ -116,6 +116,36 @@ class AsyncFlirThermalController:
             print(f"红外相机初始化错误: {e}")
             return False
 
+    def smart_thermal_preparation(self, thermal_cam, target_delay=3.0):
+        """智能红外相机准备 - 借鉴测试脚本的成功策略"""
+        print(f"🔧 红外相机智能准备中（{target_delay}秒）...")
+        
+        start_time = time.time()
+        ready_signals = 0
+        
+        for i in range(int(target_delay), 0, -1):
+            print(f"   ⏰ 红外相机准备倒计时: {i}秒...")
+            
+            # 检查相机状态
+            check_start = time.time()
+            while time.time() - check_start < 1.0:
+                if hasattr(thermal_cam, 'captured_count'):
+                    if thermal_cam.captured_count > 0:
+                        ready_signals += 1
+                time.sleep(0.1)
+        
+        # 额外等待确保完全稳定
+        if ready_signals > 0:
+            print(f"   ✅ 检测到红外相机活跃信号 ({ready_signals}个)")
+        else:
+            print(f"   ⚠️  未检测到活跃信号，额外等待0.5秒...")
+            time.sleep(0.5)
+        
+        total_prep_time = time.time() - start_time
+        print(f"   📊 红外相机准备完成: {total_prep_time:.2f}秒")
+        
+        return total_prep_time
+
     def start_capture(self):
         """开始异步采集"""
         print("开始FLIR和红外相机异步采集...")
@@ -152,12 +182,15 @@ class AsyncFlirThermalController:
                 
                 cam.BeginAcquisition()
                 
-                # 启动所有采集线程
-                self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                # 启动采集线程
                 self.executor.submit(self._thermal_capture_worker)
                 
-                # 短暂延时确保所有线程就绪
-                time.sleep(0.2)
+                
+                # 关键修改：使用成功的智能等待策略
+                print("📡 应用测试脚本的成功策略...")
+                self.smart_thermal_preparation(self.thermal_cam, 4.0)
+                self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                print(f"发送相机触发指令，采集 {NUM_IMAGES} 张图像...")
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)

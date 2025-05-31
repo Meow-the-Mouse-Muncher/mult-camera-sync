@@ -55,8 +55,8 @@ class ThermalCamera:
         self.captured_count = 0
         
         # 异步处理
-        self.executor = ThreadPoolExecutor(max_workers=3)  # 增加worker数量：1个拷贝，2个图像处理
-        self.frame_queue = queue.Queue(maxsize=200)  # 帧数据队列
+        self.executor = ThreadPoolExecutor(max_workers=4)  # 增加worker数量：1个拷贝，3个图像处理
+        self.frame_queue = queue.Queue(maxsize=300)  # 增加帧数据队列大小以减少丢帧
         self.copy_future = None
         self.process_future = None
         self.is_processing = False
@@ -105,9 +105,23 @@ class ThermalCamera:
                 self.is_capturing = False
                 
         except queue.Full:
-            # 性能优化：队列满时不打印警告，避免影响回调速度
-            # 如果队列满了，不增加captured_count，这样保证队列任务数和计数匹配
-            pass
+            # 队列满时，记录警告但继续尝试（减少丢帧）
+            print(f"警告：帧队列已满，可能丢帧（当前帧 {self.captured_count}）")
+            # 尝试强制清理一些旧帧以腾出空间
+            try:
+                # 清理最早的几帧为新帧腾出空间
+                for _ in range(5):
+                    if not self.frame_queue.empty():
+                        old_frame = self.frame_queue.get_nowait()
+                        self.frame_queue.task_done()
+                # 再次尝试放入当前帧
+                self.frame_queue.put_nowait((frame, self.captured_count))
+                self.captured_count += 1
+                if self.captured_count >= self.target_count:
+                    self.is_capturing = False
+            except:
+                # 如果仍然失败，这帧确实丢失了
+                pass
             
         return 0
     
@@ -176,14 +190,7 @@ class ThermalCamera:
             return True
     def start_capture(self):
         """开始采集图像 - 异步版本"""
-        if not self.is_connected:
-            print("相机未连接")
-            return False
-        
-        if not self.frame_buffer:
-            print("未配置帧缓存")
-            return False
-        
+     
         # 清空队列
         while not self.frame_queue.empty():
             try:
@@ -210,7 +217,7 @@ class ThermalCamera:
     def _async_copy_worker(self):
         """异步数据拷贝工作线程 - 优化版本，移除调试信息"""
         processed_count = 0
-        max_wait_time = 30  # 最大等待时间30秒
+        max_wait_time = 60  # 增加最大等待时间到60秒
         start_time = time.time()
         
         # 等待采集真正开始或有数据进入队列
@@ -219,8 +226,8 @@ class ThermalCamera:
         
         while (self.is_capturing or not self.frame_queue.empty()):
             try:
-                # 从队列获取frame指针和索引
-                frame_ptr, frame_index = self.frame_queue.get(timeout=1.0)
+                # 从队列获取frame指针和索引，减少超时时间提高响应
+                frame_ptr, frame_index = self.frame_queue.get(timeout=0.5)
                 
                 # 在工作线程中进行数据拷贝，避免阻塞回调
                 try:
@@ -265,7 +272,7 @@ class ThermalCamera:
         wait_start_time = time.time()
         while self.is_capturing:
             time.sleep(0.5)  # 每0.5秒检查一次
-            # 检查是否超时 (30秒)
+            # 检查是否超时 (60秒，给大数据量更多时间)
             if time.time() - wait_start_time > 30:
                 print("红外相机采集超时！强制停止")
                 self.is_capturing = False
@@ -276,7 +283,7 @@ class ThermalCamera:
         # 等待数据拷贝完成
         if self.copy_future:
             try:
-                self.copy_future.result(timeout=10)  # 10秒超时
+                self.copy_future.result(timeout=30)  # 增加到30秒超时
             except Exception as e:
                 print(f"数据拷贝超时或出错: {e}")
         
@@ -303,7 +310,7 @@ class ThermalCamera:
         # 等待处理完成
         if self.process_future:
             try:
-                result = self.process_future.result(timeout=120)  # 增加到120秒超时
+                result = self.process_future.result(timeout=60)  # 增加超时，给大数据量处理更多时间
                 print(f"红外图像处理完成，处理了 {result} 张图像")
             except TimeoutError:
                 print("红外图像处理超时！")

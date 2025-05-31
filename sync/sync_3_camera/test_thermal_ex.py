@@ -6,7 +6,7 @@ from threading import Thread
 import signal
 from config import *
 import time
-from sync_3_camera.thermal_lib import ThermalCamera
+from thermal_lib import ThermalCamera
 
 
 def ensure_dir(path):

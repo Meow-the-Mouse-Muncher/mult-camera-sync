@@ -161,11 +161,12 @@ class AsyncCameraController:
                 
                 # 启动采集线程
                 self.executor.submit(self._thermal_capture_worker)
-                self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                time.sleep(0.9)
+                
                 self.executor.submit(self._prophesee_capture_worker)
-
+                self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 # 短暂延时确保所有线程就绪
-                time.sleep(0.1)
+                # time.sleep(0.2)
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)

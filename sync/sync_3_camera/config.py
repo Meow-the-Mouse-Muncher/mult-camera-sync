@@ -1,10 +1,10 @@
 from multiprocessing import Value
 
 # FLIR相机配置参数
-FLIR_FRAMERATE = 10  # fps
+FLIR_FRAMERATE = 15  # fps
 FLIR_EXPOSURE_TIME = 5000  # us
 FLIR_BALANCE_WHITE = 1.6
-FLIR_AUTO_EXPOSURE = True  # 自动曝光设置
+FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
 # 缓冲区和超时配置
 FLIR_BUFFER_COUNT = 30           # 缓冲区数量
@@ -36,7 +36,7 @@ THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 
 # Prophesee事件相机配置
 PROPHESEE_FILTER_THS = 20000  # Length of the time window for filtering (in us)
-PROPHESEE_CUT_TRAIL = True  # If true, after an event goes through, it removes all events until change of polarity
+PROPHESEE_CUT_TRAIL = False  # If true, after an event goes through, it removes all events until change of polarity
 PROPHESEE_Digital_Crop = True  # If true, crop the image to the ROI 
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60

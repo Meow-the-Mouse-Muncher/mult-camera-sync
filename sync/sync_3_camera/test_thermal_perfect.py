@@ -232,8 +232,8 @@ def main():
         monitor_thread = Thread(target=monitor_wrapper)
         monitor_thread.start()
         
-        print("\n⏰ 第3步: 智能准备等待...")
-        prep_time = smart_camera_preparation(thermal_cam, 4.0)
+        # print("\n⏰ 第3步: 智能准备等待...")
+        # prep_time = smart_camera_preparation(thermal_cam, 4.0)
         
         print("\n📡 第4步: 发送触发命令...")
         trigger_time = time.time()

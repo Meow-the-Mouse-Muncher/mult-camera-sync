@@ -188,7 +188,7 @@ class AsyncFlirThermalController:
                 
                 # 关键修改：使用成功的智能等待策略
                 print("📡 应用测试脚本的成功策略...")
-                self.smart_thermal_preparation(self.thermal_cam, 4.0)
+                self.smart_thermal_preparation(self.thermal_cam, 1.0)
                 self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 print(f"发送相机触发指令，采集 {NUM_IMAGES} 张图像...")
                 

@@ -11,6 +11,7 @@ import time
 from event_lib import *
 from flir_lib import FlirCamera
 from thermal_lib import ThermalCamera
+from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
 
 class AsyncCameraController:
     """异步相机控制器"""
@@ -161,7 +162,7 @@ class AsyncCameraController:
                 
                 # 启动采集线程
                 self.executor.submit(self._thermal_capture_worker)
-                # time.sleep(0.1)  # 确保红外相机先启动
+                # time.sleep(2.1)  # 确保红外相机先启动
                 self.executor.submit(self._prophesee_capture_worker)
                 self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
@@ -399,7 +400,25 @@ def create_save_directories(base_path):
     return save_path
 
 def main():
-    """主函数"""
+    """主函数 - Xavier NX优化版实时优先级支持"""
+    print("=== 三相机同步采集系统 (Xavier NX优化) ===")
+    
+    # 检查系统实时权限
+    has_rt_perms = print_system_info()
+    
+    if not has_rt_perms:
+        print("建议以root权限运行以获得最佳性能: sudo python3 sync_3_camera_async.py")
+        print("继续运行（性能可能受限）...")
+    
+    # 尝试设置主线程优先级 - Xavier优化设置
+    if has_rt_perms:
+        # 主线程：负责整体控制流程，绑定到Denver高性能核心
+        setup_realtime_thread(
+            priority=40,           # 较保守的优先级
+            policy=SCHED_RR,       # 使用RR调度而不是FIFO
+            cpu_list=[0, 1]        # 绑定到Denver核心
+        )
+    
     # 初始化共享变量
     RUNNING.value = 1
     ACQUISITION_FLAG.value = 0
@@ -415,6 +434,7 @@ def main():
     
     try:
         # 并行初始化相机
+        print("\n正在初始化相机...")
         if not controller.initialize_cameras():
             print("相机初始化失败")
             return False
@@ -422,13 +442,14 @@ def main():
         print("所有相机初始化成功")
         
         # 开始异步采集
+        print("\n开始异步采集...")
         if not controller.start_capture():
             print("采集失败")
             return False
         
         # 短暂延时确保所有处理完成
         time.sleep(1)
-        print("采集完成")
+        print("\n采集完成")
         return True
         
     except Exception as e:
@@ -437,7 +458,7 @@ def main():
     finally:
         controller.cleanup()
         
-        # 最终清理SDK（只在程序退出时调用）
+        # 最终清理SDK
         try:
             from thermal_lib import ensure_sdk_cleanup
             ensure_sdk_cleanup()

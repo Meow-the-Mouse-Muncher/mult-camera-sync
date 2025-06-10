@@ -3,12 +3,14 @@ import time
 import os
 import numpy as np
 from datetime import datetime
+import ctypes
 from ctypes import *
 import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 from PIL import Image
+from realtime_priority import setup_nice_thread, set_thread_priority, SCHED_FIFO, setup_nice_thread
 
 # 全局SDK状态管理
 _sdk_initialized = False
@@ -54,9 +56,9 @@ class ThermalCamera:
         self.target_count = 0
         self.captured_count = 0
         
-        # 异步处理
-        self.executor = ThreadPoolExecutor(max_workers=4)  # 增加worker数量：1个拷贝，3个图像处理
-        self.frame_queue = queue.Queue(maxsize=300)  # 增加帧数据队列大小以减少丢帧
+        # 异步处理 - 使用自定义的高优先级线程池
+        self.executor = None  # 将在start_capture中创建高优先级线程池
+        self.frame_queue = queue.Queue(maxsize=500)  # 增加队列大小以减少丢帧
         self.copy_future = None
         self.process_future = None
         self.is_processing = False
@@ -87,23 +89,35 @@ class ThermalCamera:
         self.callback = VIDEOCALLBACKFUNC(self.frame_callback)
 
     def frame_callback(self, frame, this):
-        """帧数据回调处理 - 独立采集版本"""
-        # 只检查自身采集状态，不检查ACQUISITION_FLAG
+        """帧数据回调处理 - 直接传递指针版本"""
+        # 只检查自身采集状态
         if not self.is_capturing or self.captured_count >= self.target_count:
             if self.is_capturing and self.captured_count >= self.target_count:
                 self.is_capturing = False
             return 0
-        
+    
         try:
+            # 验证frame指针有效性
+            if not frame:
+                return -1
+            
             # 直接将frame指针和索引放入队列，避免在回调中进行数据拷贝
             # 这样可以最大限度减少回调函数的执行时间
             frame_index = self.captured_count
             self.frame_queue.put_nowait((frame, frame_index))
+
+
+            # frame_struct = ctypes.cast(frame, ctypes.POINTER(Frame)).contents
+            # abzcnt = frame_struct.abzcnt
+            
+            # # 打印帧计数器信息
+            # print(f"帧 {self.captured_count}: abzcnt = {abzcnt}")
+            
             # 只有成功放入队列后才增加计数
             self.captured_count += 1
             if self.captured_count >= self.target_count:
                 self.is_capturing = False
-                
+            
         except queue.Full:
             # 队列满时，记录警告但继续尝试（减少丢帧）
             print(f"警告：帧队列已满，可能丢帧（当前帧 {self.captured_count}）")
@@ -122,9 +136,9 @@ class ThermalCamera:
             except:
                 # 如果仍然失败，这帧确实丢失了
                 pass
-            
-        return 0
     
+        return 0
+
     def connect(self, ip_address=None, port=None):
         """连接相机"""
         ip_address = ip_address or THERMAL_CAMERA_IP
@@ -188,9 +202,28 @@ class ThermalCamera:
             else: # frame_count == 0
                 print(f"红外相机配置成功。请求采集 0 帧，将不保存任何图像。")
             return True
+    def _create_realtime_executor(self):
+        """创建高优先级线程池"""
+        class RealtimeThreadPoolExecutor(ThreadPoolExecutor):
+            def __init__(self, max_workers=None, **kwargs):
+                super().__init__(max_workers=max_workers, **kwargs)
+                
+            def _worker(self, *args, **kwargs):
+                """重写worker方法以设置nice优先级"""
+                # 设置线程为最高nice优先级
+                success = setup_nice_thread(nice_value=-20, cpu_list=[4, 5])  # 使用Xavier NX的CPU核心4和5
+                # 调用原始worker方法
+                return super()._worker(*args, **kwargs)
+        
+        return RealtimeThreadPoolExecutor(max_workers=2)  # 一个用于拷贝，一个备用
+
     def start_capture(self):
-        """开始采集图像 - 异步版本"""
-     
+        """开始采集图像 - 异步版本，使用高优先级线程"""
+        # 创建高优先级线程池
+        if self.executor:
+            self.executor.shutdown(wait=False)
+        self.executor = self._create_realtime_executor()
+        
         # 清空队列
         while not self.frame_queue.empty():
             try:
@@ -208,63 +241,56 @@ class ThermalCamera:
         self.copy_future = None
         self.process_future = None
         
-        # 启动异步数据拷贝 - 在设置is_capturing=True之后
+        # 启动高优先级异步数据拷贝线程
         self.copy_future = self.executor.submit(self._async_copy_worker)
         
         print(f"开始采集 {self.target_count} 张图像")
         return True
     
     def _async_copy_worker(self):
-        """异步数据拷贝工作线程 - 优化版本，移除调试信息"""
+        """异步数据拷贝工作线程 """
+    
         processed_count = 0
-        max_wait_time = 60  # 增加最大等待时间到60秒
-        start_time = time.time()
-        
-        # 等待采集真正开始或有数据进入队列
-        while self.is_capturing and self.frame_queue.empty() and (time.time() - start_time) < 5:
-            time.sleep(0.1)  # 等待采集开始
-        
+
         while (self.is_capturing or not self.frame_queue.empty()):
             try:
-                # 从队列获取frame指针和索引，减少超时时间提高响应
-                frame_ptr, frame_index = self.frame_queue.get(timeout=0.5)
+                # 从队列获取frame指针和索引
+                frame_ptr, frame_index = self.frame_queue.get(timeout=0.1)
                 
                 # 在工作线程中进行数据拷贝，避免阻塞回调
                 try:
-                    bytebuf = string_at(frame_ptr, self.frame_size)
-                    frame_data = bytes(bytebuf)  # 创建数据副本
-                    
-                    # 拷贝到frame_buffer
-                    with self.mutex:
-                        if frame_index < len(self.frame_buffer):
-                            memmove(addressof(self.frame_buffer[frame_index]), frame_data, len(frame_data))
-                            processed_count += 1
-                            
-                except Exception as e:
-                    # 性能优化：只记录严重错误，避免频繁打印
-                    pass
+                    # 确保索引有效
+                    if 0 <= frame_index < len(self.frame_buffer):
+                        # 直接从C指针一次性复制到Frame结构，避免中间步骤
+                        ctypes.memmove(
+                            ctypes.addressof(self.frame_buffer[frame_index]), 
+                            frame_ptr, 
+                            self.frame_size
+                        )
+                        processed_count += 1
+
+                        
+                except (ValueError, OSError) as e:
+
+                    print(f"处理错误: {e}")
                 finally:
                     # 确保无论成功失败都调用task_done
                     self.frame_queue.task_done()
-                
+        
             except queue.Empty:
                 # 如果队列空了但还在采集，继续等待
                 if self.is_capturing:
                     continue
-                # 如果不在采集且队列空了，检查是否超时
-                if time.time() - start_time > max_wait_time:
-                    # 数据拷贝线程等待超时，退出
+                else:
                     break
-                continue
             except Exception as e:
                 # 性能优化：减少错误打印
-                # 如果从队列获取数据成功但处理失败，也需要调用task_done
                 try:
                     self.frame_queue.task_done()
                 except:
                     pass
-        
-        # 数据拷贝线程完成，处理了指定数量的帧
+
+        print(f"数据拷贝完成: {processed_count} 帧")
     
     def wait_for_completion(self):
         """等待采集和处理完成 - 独立采集版本"""
@@ -423,52 +449,60 @@ class ThermalCamera:
             sdk_setcaliSw(self.handle, sw)
 
     def cleanup(self):
-        """清理相机资源 - 优化版本"""
+        """清理相机资源 - 高优先级线程优化版本"""
         print("正在清理红外相机资源...")
         
         # 停止采集
         self.is_capturing = False
         
-        # 等待并清理线程池
+        # 等待并清理高优先级线程池
         if hasattr(self, 'executor') and self.executor:
             try:
-                # 等待正在执行的任务完成
+                print("正在关闭高优先级线程池...")
+                # 等待数据拷贝线程完成
                 if self.copy_future and not self.copy_future.done():
                     try:
-                        self.copy_future.result(timeout=5)
-                    except Exception:
-                        pass
+                        self.copy_future.result(timeout=10)  # 给更多时间让高优先级线程完成
+                        print("数据拷贝线程已正常结束")
+                    except Exception as e:
+                        print(f"数据拷贝线程结束时出现异常: {e}")
+                        
                 if self.process_future and not self.process_future.done():
                     try:
-                        self.process_future.result(timeout=10)
-                    except Exception:
-                        pass
+                        self.process_future.result(timeout=15)
+                        print("数据处理线程已正常结束")
+                    except Exception as e:
+                        print(f"数据处理线程结束时出现异常: {e}")
                     
-                # 关闭线程池
+                # 强制关闭线程池
                 self.executor.shutdown(wait=True)
+                print("高优先级线程池已关闭")
             except Exception as e:
-                # 清理线程池时可能出错，但不影响主要流程
-                pass
+                print(f"清理高优先级线程池时出错: {e}")
         
-        # 清空队列
+        # 清空帧队列
         try:
+            queue_size = self.frame_queue.qsize()
+            if queue_size > 0:
+                print(f"正在清空帧队列 ({queue_size} 个待处理帧)...")
             while not self.frame_queue.empty():
                 try:
                     self.frame_queue.get_nowait()
                     self.frame_queue.task_done()
                 except:
                     break
-        except:
-            pass
+            print("帧队列已清空")
+        except Exception as e:
+            print(f"清空帧队列时出错: {e}")
         
         # 断开相机连接
         if self.is_connected:
             try:
                 sdk_stop(self.handle)
                 self.is_connected = False
+                print("红外相机连接已断开")
             except Exception as e:
-                # 停止相机时出错，但不影响清理流程
-                pass
+                print(f"断开红外相机连接时出错: {e}")
         
         # 注意：不要调用 sdk_quit()，因为这是全局的，可能影响下次初始化
         # 只在程序完全退出时才调用 sdk_quit()

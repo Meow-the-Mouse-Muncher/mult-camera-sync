@@ -416,10 +416,10 @@ def main():
         print("继续运行（性能可能受限）...")
     
     # 尝试设置主线程优先级 - Xavier优化设置
-    setup_nice_thread(
-        nice_value=0,        # 较高优先级的nice值
-        cpu_list=[2, 3]        # 绑定到Denver核心
-    )
+    # setup_nice_thread(
+    #     nice_value=0,        # 较高优先级的nice值
+    #     cpu_list=[2, 3]        
+    # )
     
     # 初始化共享变量
     RUNNING.value = 1

@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 from PIL import Image
-from realtime_priority import setup_nice_thread, set_thread_priority, SCHED_FIFO, setup_nice_thread
+from realtime_priority import setup_nice_thread, set_thread_priority, SCHED_FIFO
 
 # 全局SDK状态管理
 _sdk_initialized = False
@@ -105,13 +105,6 @@ class ThermalCamera:
             # 这样可以最大限度减少回调函数的执行时间
             frame_index = self.captured_count
             self.frame_queue.put_nowait((frame, frame_index))
-
-
-            # frame_struct = ctypes.cast(frame, ctypes.POINTER(Frame)).contents
-            # abzcnt = frame_struct.abzcnt
-            
-            # # 打印帧计数器信息
-            # print(f"帧 {self.captured_count}: abzcnt = {abzcnt}")
             
             # 只有成功放入队列后才增加计数
             self.captured_count += 1
@@ -202,27 +195,12 @@ class ThermalCamera:
             else: # frame_count == 0
                 print(f"红外相机配置成功。请求采集 0 帧，将不保存任何图像。")
             return True
-    def _create_realtime_executor(self):
-        """创建高优先级线程池"""
-        class RealtimeThreadPoolExecutor(ThreadPoolExecutor):
-            def __init__(self, max_workers=None, **kwargs):
-                super().__init__(max_workers=max_workers, **kwargs)
-                
-            def _worker(self, *args, **kwargs):
-                """重写worker方法以设置nice优先级"""
-                # 设置线程为最高nice优先级
-                success = setup_nice_thread(nice_value=-20, cpu_list=[4, 5])  # 使用Xavier NX的CPU核心4和5
-                # 调用原始worker方法
-                return super()._worker(*args, **kwargs)
-        
-        return RealtimeThreadPoolExecutor(max_workers=2)  # 一个用于拷贝，一个备用
-
     def start_capture(self):
-        """开始采集图像 - 异步版本，使用高优先级线程"""
-        # 创建高优先级线程池
+        """开始采集图像 - 异步版本，使用标准线程池"""
+        # 使用标准ThreadPoolExecutor，在工作函数内设置优先级
         if self.executor:
             self.executor.shutdown(wait=False)
-        self.executor = self._create_realtime_executor()
+        self.executor = ThreadPoolExecutor(max_workers=2)  # 直接使用标准线程池
         
         # 清空队列
         while not self.frame_queue.empty():
@@ -241,15 +219,18 @@ class ThermalCamera:
         self.copy_future = None
         self.process_future = None
         
-        # 启动高优先级异步数据拷贝线程
+        # 启动数据拷贝线程（优先级设置在工作函数内）
         self.copy_future = self.executor.submit(self._async_copy_worker)
         
         print(f"开始采集 {self.target_count} 张图像")
         return True
     
     def _async_copy_worker(self):
-        """异步数据拷贝工作线程 """
-    
+        """异步数据拷贝工作线程"""
+        # 在工作函数开始时设置线程优先级
+        setup_nice_thread(nice_value=-15, cpu_list=[4, 5])
+        # print("红外相机数据拷贝线程已绑定到CPU 4-5")
+        
         processed_count = 0
 
         while (self.is_capturing or not self.frame_queue.empty()):
@@ -345,6 +326,10 @@ class ThermalCamera:
 
     def process_frames(self):
         """处理采集的帧 - 优化版本，支持并行处理"""
+        # 在工作函数开始时设置线程优先级
+        # setup_nice_thread(nice_value=-10, cpu_list=[4, 5])
+        # print("红外相机图像处理线程已绑定到CPU 4-5")
+        
         frames_actually_captured = min(self.captured_count, self.target_count)
         
         # 使用主程序传入的保存路径
@@ -449,20 +434,20 @@ class ThermalCamera:
             sdk_setcaliSw(self.handle, sw)
 
     def cleanup(self):
-        """清理相机资源 - 高优先级线程优化版本"""
+        """清理相机资源"""
         print("正在清理红外相机资源...")
         
         # 停止采集
         self.is_capturing = False
         
-        # 等待并清理高优先级线程池
+        # 等待并清理标准线程池
         if hasattr(self, 'executor') and self.executor:
             try:
-                print("正在关闭高优先级线程池...")
+                print("正在关闭线程池...")
                 # 等待数据拷贝线程完成
                 if self.copy_future and not self.copy_future.done():
                     try:
-                        self.copy_future.result(timeout=10)  # 给更多时间让高优先级线程完成
+                        self.copy_future.result(timeout=10)
                         print("数据拷贝线程已正常结束")
                     except Exception as e:
                         print(f"数据拷贝线程结束时出现异常: {e}")
@@ -476,9 +461,9 @@ class ThermalCamera:
                     
                 # 强制关闭线程池
                 self.executor.shutdown(wait=True)
-                print("高优先级线程池已关闭")
+                print("线程池已关闭")
             except Exception as e:
-                print(f"清理高优先级线程池时出错: {e}")
+                print(f"清理线程池时出错: {e}")
         
         # 清空帧队列
         try:
@@ -503,8 +488,5 @@ class ThermalCamera:
                 print("红外相机连接已断开")
             except Exception as e:
                 print(f"断开红外相机连接时出错: {e}")
-        
-        # 注意：不要调用 sdk_quit()，因为这是全局的，可能影响下次初始化
-        # 只在程序完全退出时才调用 sdk_quit()
             
         print("红外相机资源清理完成")

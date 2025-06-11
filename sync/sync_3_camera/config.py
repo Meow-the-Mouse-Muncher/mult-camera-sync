@@ -1,7 +1,7 @@
 from multiprocessing import Value
 
 # FLIR相机配置参数
-FLIR_FRAMERATE = 15  # fps
+FLIR_FRAMERATE = 12  # fps
 FLIR_EXPOSURE_TIME = 5000  # us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
@@ -24,6 +24,7 @@ FLIR_HEIGHT = 1800        # 裁剪后高度
 FLIR_OFFSET_X = (FLIR_ORIGIN_WIDTH - FLIR_WIDTH) // 2   # 水平偏移量
 FLIR_OFFSET_Y = (FLIR_ORIGIN_HEIGHT - FLIR_HEIGHT) // 2 # 垂直偏移量
 FLIR_ThroughputLimit = 500000000   # 限制相机吞吐量
+# 500000000
 # FLIR_ThroughputLimit = 430 000 000 500 000 000.  # 限制相机吞吐量
 
 # 红外相机配置参数

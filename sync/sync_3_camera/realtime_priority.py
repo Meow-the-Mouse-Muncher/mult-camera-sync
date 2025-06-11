@@ -226,7 +226,6 @@ def set_thread_nice_priority(nice_value, thread_id=None, cpu_list=None):
         # PRIO_PROCESS = 0, 对指定的线程ID设置优先级
         result = libc.setpriority(0, thread_id, nice_value)
         if result == 0:
-            print(f"✓ 线程 {thread_id} nice值设置成功: {nice_value}")
             success_count += 1
         else:
             errno = ctypes.get_errno()
@@ -237,7 +236,6 @@ def set_thread_nice_priority(nice_value, thread_id=None, cpu_list=None):
     # 2. 设置CPU亲和性
     if cpu_list:
         if set_cpu_affinity(cpu_list, thread_id):
-            print(f"✓ 线程 {thread_id} CPU亲和性设置成功: {cpu_list}")
             success_count += 1
         else:
             print(f"✗ 线程 {thread_id} CPU亲和性设置失败")
@@ -245,10 +243,6 @@ def set_thread_nice_priority(nice_value, thread_id=None, cpu_list=None):
         total_operations = 1  # 只有nice值设置
     
     success = success_count == total_operations
-    if success:
-        print(f"✓ 线程 {thread_id} 优先级完全设置成功")
-    else:
-        print(f"⚠️ 线程 {thread_id} 优先级部分设置失败 ({success_count}/{total_operations})")
     
     return success
 

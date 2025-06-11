@@ -227,6 +227,12 @@ class AsyncCameraController:
     def _prophesee_capture_worker(self):
         """事件相机采集工作线程"""
         try:
+            # 设置事件相机采集线程优先级和CPU绑定
+            # setup_nice_thread(
+            #     nice_value=-15,        # 高优先级
+            #     cpu_list=[0, 1]       # 绑定到Denver核心
+            # )
+            
             # 启动事件流记录
             result = self.prophesee_cam.start_recording()
             print("事件相机采集完成")
@@ -330,7 +336,6 @@ class AsyncCameraController:
         # 准备数据数组
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
-        # 注意：不再传递时间戳参数，因为FLIR库已经移除了时间戳保存
         
         # 保存数据（只传递图像和曝光时间）
         self.flir._save_data(image_array, exposure_array, self.save_path)
@@ -411,13 +416,10 @@ def main():
         print("继续运行（性能可能受限）...")
     
     # 尝试设置主线程优先级 - Xavier优化设置
-    if has_rt_perms:
-        # 主线程：负责整体控制流程，绑定到Denver高性能核心
-        setup_realtime_thread(
-            priority=40,           # 较保守的优先级
-            policy=SCHED_RR,       # 使用RR调度而不是FIFO
-            cpu_list=[0, 1]        # 绑定到Denver核心
-        )
+    setup_nice_thread(
+        nice_value=0,        # 较高优先级的nice值
+        cpu_list=[2, 3]        # 绑定到Denver核心
+    )
     
     # 初始化共享变量
     RUNNING.value = 1

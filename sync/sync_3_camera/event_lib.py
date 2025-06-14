@@ -93,8 +93,8 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        self.device.get_i_ll_biases().set('bias_diff_off', 50)
-        self.device.get_i_ll_biases().set('bias_diff_on', 50)
+        self.device.get_i_ll_biases().set('bias_diff_off', 75)
+        self.device.get_i_ll_biases().set('bias_diff_on', 75)
         
         # # # 假设 device 是已初始化的设备对象
         # if PROPHESEE_CUT_TRAIL:

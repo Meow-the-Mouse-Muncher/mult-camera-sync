@@ -643,7 +643,6 @@ class FlirCamera:
             for idx, img_data in enumerate(images):
                 f.write(img_data.tobytes())
                 if idx % 10 == 0:
-                    
                     # 确保使用正确的 Bayer 模式进行转换
                     if FLIR_OFFSET_X % 2 == 0 and FLIR_OFFSET_Y % 2 == 0:
                         rgb_image = cv.cvtColor(img_data, cv.COLOR_BayerRG2RGB)
@@ -658,7 +657,7 @@ class FlirCamera:
                         pattern_key = (FLIR_OFFSET_X % 2, FLIR_OFFSET_Y % 2)
                         rgb_image = cv.cvtColor(img_data, bayer_patterns[pattern_key])
                     
-                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.png'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
+                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.jpg'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
 
         # 只保存曝光时间，不保存时间戳
         np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)

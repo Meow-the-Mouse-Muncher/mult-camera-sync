@@ -5,6 +5,7 @@ import os
 from threading import Thread, Event, Lock
 import signal
 import queue
+import streamPiper
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 import time
@@ -188,6 +189,10 @@ class AsyncCameraController:
     
     def _flir_capture_worker(self, cam, nodemap):
         """FLIR相机采集工作线程"""
+        setup_nice_thread(
+                nice_value=-15,        # 高优先级
+                cpu_list=[0, 1]       # 绑定到Denver核心
+            )
         try:
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
@@ -229,7 +234,7 @@ class AsyncCameraController:
         try:
             # 设置事件相机采集线程优先级和CPU绑定
             # setup_nice_thread(
-            #     nice_value=-15,        # 高优先级
+            #     nice_value=-20,        # 高优先级
             #     cpu_list=[0, 1]       # 绑定到Denver核心
             # )
             

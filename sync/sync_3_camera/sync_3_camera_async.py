@@ -1,6 +1,7 @@
 import sys
 import serial
 import time
+import datetime
 import os
 from threading import Thread, Event, Lock
 import signal
@@ -27,6 +28,7 @@ class AsyncCameraController:
         
         # 相机实例
         self.flir = None
+        self.nodemap = None
         self.prophesee_cam = None
         self.thermal_cam = None
         
@@ -152,9 +154,9 @@ class AsyncCameraController:
             print(f'正在配置FLIR相机 {i}...')
             try:
                 cam.Init()
-                nodemap = cam.GetNodeMap()
+                self.nodemap = cam.GetNodeMap()
                 
-                if not self.flir.config_camera(nodemap):
+                if not self.flir.config_camera(self.nodemap):
                     print("FLIR相机配置失败")
                     return False
                 
@@ -165,7 +167,7 @@ class AsyncCameraController:
                 self.executor.submit(self._thermal_capture_worker)
                 # time.sleep(2.1)  # 确保红外相机先启动
                 self.executor.submit(self._prophesee_capture_worker)
-                self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                self.executor.submit(self._flir_capture_worker, cam, self.nodemap)
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
@@ -203,7 +205,7 @@ class AsyncCameraController:
                     print(f'FLIR图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()
                     continue
-                
+                capture_time = datetime.datetime.now().timestamp() 
                 # 快速获取数据并放入队列
                 image_data = image_result.GetNDArray().copy()
                 _, exposure_time = self.flir.read_chunk_data(image_result)
@@ -212,7 +214,7 @@ class AsyncCameraController:
                     'index': i,
                     'data': image_data,
                     'exposure_time': exposure_time,
-                    'timestamp': 0  # 不再收集真实时间戳，使用占位符
+                    'timestamp': capture_time 
                 })
                 
                 image_result.Release()
@@ -292,7 +294,7 @@ class AsyncCameraController:
                 idx = data['index']
                 images[idx] = data['data']
                 exposure_times[idx] = data['exposure_time']
-                timestamps[idx] = data['timestamp']
+                timestamps[idx] = data['timestamp']  
                 
                 self.flir_queue.task_done()
                 
@@ -304,7 +306,7 @@ class AsyncCameraController:
         
         # 处理和保存数据
         if images:
-            self._save_flir_data(images, exposure_times, timestamps)
+            self._save_flir_data(images, exposure_times,timestamps)
     
     def _thermal_data_processor(self):
         """红外数据处理线程"""
@@ -326,7 +328,7 @@ class AsyncCameraController:
         except Exception as e:
             print(f"事件相机数据处理失败: {e}")
     
-    def _save_flir_data(self, images, exposure_times, timestamps):
+    def _save_flir_data(self, images, exposure_times,timestamps):
         """保存FLIR数据"""
         # 按索引排序
         sorted_indices = sorted(images.keys())
@@ -341,9 +343,13 @@ class AsyncCameraController:
         # 准备数据数组
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
-        
+        timestamp_list = np.array([timestamps[i] for i in valid_indices])
+    
         # 保存数据（只传递图像和曝光时间）
-        self.flir._save_data(image_array, exposure_array, self.save_path)
+        self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
+        # 重置
+        self.flir._disable_chunk_data(self.nodemap)
+        self.flir._reset_trigger(self.nodemap)
         print(f"已保存 {len(valid_indices)} 张FLIR图像")
     
     def cleanup(self):

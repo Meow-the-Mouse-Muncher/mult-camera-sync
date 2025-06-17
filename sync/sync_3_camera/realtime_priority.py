@@ -130,7 +130,7 @@ def check_realtime_permissions():
     uid = os.getuid()
     
     if uid != 0:
-        print("运行权限: 非root (某些优化可能受限)")
+        # print("运行权限: 非root (某些优化可能受限)")
         return False
     
     print("运行权限: root (优化功能已启用)")
@@ -142,7 +142,7 @@ def check_realtime_permissions():
 
 def print_system_info():
     """打印系统信息 - Xavier兼容版"""
-    print("=== Xavier NX 三相机同步采集系统 ===")
+    # print("=== Xavier NX 三相机同步采集系统 ===")
     
     # 检查权限（不强制退出）
     check_realtime_permissions()
@@ -150,7 +150,7 @@ def print_system_info():
     # 检查CPU信息
     try:
         cpu_count = os.cpu_count()
-        print(f"CPU配置: {cpu_count}核心 (Denver 0-1, ARM A78 2-5)")
+        # print(f"CPU配置: {cpu_count}核心 (Denver 0-1, ARM A78 2-5)")
     except:
         print("CPU配置: 未知")
     

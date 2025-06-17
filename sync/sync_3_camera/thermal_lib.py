@@ -6,6 +6,7 @@ from datetime import datetime
 import ctypes
 from ctypes import *
 import queue
+import cv2 as cv
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from config import *
@@ -33,7 +34,6 @@ def ensure_sdk_cleanup():
             try:
                 sdk_quit()
                 _sdk_initialized = False
-                print("红外SDK已清理")
             except Exception as e:
                 print(f"清理红外SDK时出错: {e}")
 
@@ -43,6 +43,7 @@ class ThermalCamera:
         self.handle = 0
         self.is_connected = False
         self.last_callback_time = None
+        self.realtime_callback = None  # 实时图传回调
         
         # 图像相关参数
         self.imgsize = [THERMAL_HEIGHT, THERMAL_WIDTH]
@@ -87,6 +88,10 @@ class ThermalCamera:
         # 设置回调函数
         VIDEOCALLBACKFUNC = CFUNCTYPE(c_int, c_void_p, c_void_p)
         self.callback = VIDEOCALLBACKFUNC(self.frame_callback)
+
+
+    def set_realtime_callback(self, callback):
+        self.realtime_callback = callback
 
     def frame_callback(self, frame, this):
         """帧数据回调处理 - 直接传递指针版本"""
@@ -250,7 +255,24 @@ class ThermalCamera:
                         )
                         processed_count += 1
 
-                        
+                    if self.realtime_callback and frame_index > 0:
+                        # 转灰度
+                        local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
+                        sdk_frame2gray(byref(self.frame_buffer[frame_index]), byref(local_gray))
+                        gray_array = np.frombuffer(local_gray, dtype=np.uint16).reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
+                        # 归一化到0-255
+                        # min_val = gray_array.min()
+                        # max_val = gray_array.max()
+                        # if max_val == min_val:
+                        #     gray_norm = np.zeros_like(gray_array, dtype=np.uint8)
+                        # else:
+                        #     gray_norm = ((gray_array - min_val) * (255.0 / (max_val - min_val))).astype(np.uint8)
+                        # 逆时针旋转90度
+                        rotated = np.rot90(gray_array)
+                        # resize为600x600
+                        thermal_img = cv.resize(rotated, (600, 600))
+                        # 直接回调灰度图
+                        self.realtime_callback(thermal_img)     
                 except (ValueError, OSError) as e:
 
                     print(f"处理错误: {e}")
@@ -318,7 +340,6 @@ class ThermalCamera:
         if self.process_future:
             try:
                 result = self.process_future.result(timeout=60)  # 增加超时，给大数据量处理更多时间
-                print(f"红外图像处理完成，处理了 {result} 张图像")
             except TimeoutError:
                 print("红外图像处理超时！")
             except Exception as e:
@@ -435,7 +456,6 @@ class ThermalCamera:
 
     def cleanup(self):
         """清理相机资源"""
-        print("正在清理红外相机资源...")
         
         # 停止采集
         self.is_capturing = False
@@ -443,33 +463,27 @@ class ThermalCamera:
         # 等待并清理标准线程池
         if hasattr(self, 'executor') and self.executor:
             try:
-                print("正在关闭线程池...")
                 # 等待数据拷贝线程完成
                 if self.copy_future and not self.copy_future.done():
                     try:
                         self.copy_future.result(timeout=10)
-                        print("数据拷贝线程已正常结束")
                     except Exception as e:
                         print(f"数据拷贝线程结束时出现异常: {e}")
                         
                 if self.process_future and not self.process_future.done():
                     try:
                         self.process_future.result(timeout=15)
-                        print("数据处理线程已正常结束")
                     except Exception as e:
                         print(f"数据处理线程结束时出现异常: {e}")
                     
                 # 强制关闭线程池
                 self.executor.shutdown(wait=True)
-                print("线程池已关闭")
             except Exception as e:
                 print(f"清理线程池时出错: {e}")
         
         # 清空帧队列
         try:
             queue_size = self.frame_queue.qsize()
-            if queue_size > 0:
-                print(f"正在清空帧队列 ({queue_size} 个待处理帧)...")
             while not self.frame_queue.empty():
                 try:
                     self.frame_queue.get_nowait()
@@ -485,7 +499,6 @@ class ThermalCamera:
             try:
                 sdk_stop(self.handle)
                 self.is_connected = False
-                print("红外相机连接已断开")
             except Exception as e:
                 print(f"断开红外相机连接时出错: {e}")
             

@@ -397,6 +397,8 @@ class FlirCamera:
                 node_trigger_source_software = node_trigger_source.GetEntryByName('Software')
                 if PySpin.IsReadable(node_trigger_source_software):
                     node_trigger_source.SetIntValue(node_trigger_source_software.GetValue())
+            else:
+                print('无法访问触发源节点')
 
             return True
 
@@ -454,6 +456,7 @@ class FlirCamera:
             path: 保存路径
         """
         # 创建 FLIR 数据目录
+        # print("正在保存FLIR图像数据...")
         flir_dir = os.path.join(path, "flir")
         preview_dir = os.path.join(flir_dir, "preview_images")
         os.makedirs(preview_dir, exist_ok=True)
@@ -510,7 +513,6 @@ class FlirCamera:
             if self.cam_list:
                 try:
                     self.cam_list.Clear()
-                    print("相机列表已清理")
                 except PySpin.SpinnakerException as ex:
                     print(f"清理相机列表错误: {ex}")
                 self.cam_list = None
@@ -518,7 +520,6 @@ class FlirCamera:
             if self.system:
                 try:
                     self.system.ReleaseInstance()
-                    print("系统实例已释放")
                 except PySpin.SpinnakerException as ex:
                     print(f"释放系统实例错误: {ex}")
                 finally:

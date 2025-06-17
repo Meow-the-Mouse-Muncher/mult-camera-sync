@@ -1,5 +1,6 @@
 import sys
 import os
+import datetime
 import numpy as np
 from config import *
 
@@ -25,6 +26,8 @@ class EventCamera:
         self.height = PROPHESEE_ROI_Y1 - PROPHESEE_ROI_Y0
         self.path = path
         self.outputpath = os.path.join(path, 'event', 'event.raw')
+        self.time_path = os.path.join(path, 'event', 'star_end_time.txt')
+        self.timestamps = np.zeros((2,), dtype=np.float64)
         self.ieventstream = None
         self.device = None
 
@@ -93,8 +96,8 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        self.device.get_i_ll_biases().set('bias_diff_off', 75)
-        self.device.get_i_ll_biases().set('bias_diff_on', 75)
+        self.device.get_i_ll_biases().set('bias_diff_off', 90)
+        self.device.get_i_ll_biases().set('bias_diff_on', 90)
         
         # # # 假设 device 是已初始化的设备对象
         # if PROPHESEE_CUT_TRAIL:
@@ -128,6 +131,9 @@ class EventCamera:
 
         if self.outputpath:
             self.ieventstream.log_raw_data(self.outputpath)
+            star_time = datetime.datetime.now().timestamp()
+            self.timestamps[0] = star_time
+
         mv_iterator = EventsIterator.from_device(device=self.device,delta_t=7e4)
         print("事件流记录开始")
 
@@ -141,6 +147,8 @@ class EventCamera:
         """停止记录事件流"""
         if self.ieventstream:
             self.ieventstream.stop_log_raw_data()
+            self.timestamps[1] = datetime.datetime.now().timestamp()
+            np.savetxt(self.time_path, self.timestamps)
             print("事件流记录已停止")
 
 def ensure_dir(path):

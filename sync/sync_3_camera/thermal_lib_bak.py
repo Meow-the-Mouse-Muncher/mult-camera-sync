@@ -318,7 +318,6 @@ class ThermalCamera:
         if self.process_future:
             try:
                 result = self.process_future.result(timeout=60)  # 增加超时，给大数据量处理更多时间
-                print(f"红外图像处理完成，处理了 {result} 张图像")
             except TimeoutError:
                 print("红外图像处理超时！")
             except Exception as e:
@@ -443,7 +442,6 @@ class ThermalCamera:
         # 等待并清理标准线程池
         if hasattr(self, 'executor') and self.executor:
             try:
-                print("正在关闭线程池...")
                 # 等待数据拷贝线程完成
                 if self.copy_future and not self.copy_future.done():
                     try:
@@ -461,7 +459,6 @@ class ThermalCamera:
                     
                 # 强制关闭线程池
                 self.executor.shutdown(wait=True)
-                print("线程池已关闭")
             except Exception as e:
                 print(f"清理线程池时出错: {e}")
         

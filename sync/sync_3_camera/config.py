@@ -44,7 +44,7 @@ PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 200+ 1  # number of images to save (+1 because prophesee first trigger is incomplete) 100-200
+NUM_IMAGES = 20+ 1  # number of images to save (+1 because prophesee first trigger is incomplete) 100-200
 # 串口配置
 SERIAL_PORT = '/dev/ttyTHS1'
 SERIAL_BAUDRATE = 115200

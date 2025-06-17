@@ -1,0 +1,1 @@
+sudo LD_LIBRARY_PATH=/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib python sync_3_camera_async.py

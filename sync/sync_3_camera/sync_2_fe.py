@@ -329,7 +329,6 @@ class AsyncFlirEventController:
             if hasattr(self, 'executor') and self.executor:
                 try:
                     self.executor.shutdown(wait=True)
-                    print("线程池已关闭")
                 except Exception as e:
                     print(f"关闭线程池时出错: {e}")
             

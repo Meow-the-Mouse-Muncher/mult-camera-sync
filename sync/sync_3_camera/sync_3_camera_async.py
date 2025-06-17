@@ -1,12 +1,13 @@
 import sys
 import serial
+import PySpin
 import time
 import datetime
 import os
 from threading import Thread, Event, Lock
 import signal
 import queue
-# import streamPiper
+import cv2 as cv
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 import time
@@ -14,6 +15,8 @@ from event_lib import *
 from flir_lib import FlirCamera
 from thermal_lib import ThermalCamera
 from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
+os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+from lib import streamPiper
 
 class AsyncCameraController:
     """异步相机控制器"""
@@ -28,7 +31,6 @@ class AsyncCameraController:
         
         # 相机实例
         self.flir = None
-        self.nodemap = None
         self.prophesee_cam = None
         self.thermal_cam = None
         
@@ -40,6 +42,12 @@ class AsyncCameraController:
         # 状态锁
         self.status_lock = Lock()
         self.completed_cameras = 0
+        self.stream_width = 600
+        self.stream_height = 600
+        self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
+        self.latest_flir = None
+        self.latest_thermal = None
+        self.stream_lock = Lock()
         
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
@@ -61,6 +69,22 @@ class AsyncCameraController:
         finally:
             if 'ser' in locals():
                 ser.close()
+
+
+    def _on_thermal_frame(self, thermal_img):
+        with self.stream_lock:
+            self.latest_thermal = thermal_img
+            self._try_stream()
+
+    def _try_stream(self):
+        """如果两路图像都准备好，则拼接并推送"""
+        if self.latest_flir is not None and self.latest_thermal is not None:
+            half = self.stream_width // 2
+            # 创建灰度拼接画布
+            combined = np.zeros((self.stream_height, self.stream_width), dtype=np.uint8)
+            combined[:, :half] = self.latest_flir[:, :half]
+            combined[:, half:] = self.latest_thermal[:, half:]
+            self.streamPiper_instance.push(combined)
     
     def initialize_cameras(self):
         """初始化所有相机"""
@@ -110,6 +134,7 @@ class AsyncCameraController:
         """初始化红外相机"""
         try:
             self.thermal_cam = ThermalCamera()
+            self.thermal_cam.set_realtime_callback(self._on_thermal_frame)
             if not self.thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
                 print("红外相机初始化失败")
                 return False
@@ -154,9 +179,9 @@ class AsyncCameraController:
             print(f'正在配置FLIR相机 {i}...')
             try:
                 cam.Init()
-                self.nodemap = cam.GetNodeMap()
+                nodemap = cam.GetNodeMap()
                 
-                if not self.flir.config_camera(self.nodemap):
+                if not self.flir.config_camera(nodemap):
                     print("FLIR相机配置失败")
                     return False
                 
@@ -167,7 +192,7 @@ class AsyncCameraController:
                 self.executor.submit(self._thermal_capture_worker)
                 # time.sleep(2.1)  # 确保红外相机先启动
                 self.executor.submit(self._prophesee_capture_worker)
-                self.executor.submit(self._flir_capture_worker, cam, self.nodemap)
+                self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
@@ -176,6 +201,14 @@ class AsyncCameraController:
                 self.capture_complete_event.wait(timeout=50)  # 50秒超时
                 
                 # 清理相机
+                # 在相机去初始化之前进行重置操作
+                try:
+                    print("正在重置FLIR相机设置...")
+                    self.flir._disable_chunk_data(nodemap)
+                    self.flir._reset_trigger(nodemap)
+                except Exception as e:
+                    print(f"重置FLIR相机设置时出错: {e}")
+                    
                 if cam.IsStreaming():
                     cam.EndAcquisition()
                 cam.DeInit()
@@ -216,6 +249,11 @@ class AsyncCameraController:
                     'exposure_time': exposure_time,
                     'timestamp': capture_time 
                 })
+                flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                # 保持灰度，不转RGB
+                with self.stream_lock:
+                    self.latest_flir = flir_img
+                    self._try_stream()
                 
                 image_result.Release()
             
@@ -289,13 +327,12 @@ class AsyncCameraController:
                 
                 if data is None:  # 结束信号
                     break
-                
                 # 存储数据
                 idx = data['index']
                 images[idx] = data['data']
                 exposure_times[idx] = data['exposure_time']
                 timestamps[idx] = data['timestamp']  
-                
+
                 self.flir_queue.task_done()
                 
             except queue.Empty:
@@ -303,10 +340,8 @@ class AsyncCameraController:
                 if self.capture_complete_event.is_set():
                     break
                 continue
-        
         # 处理和保存数据
-        if images:
-            self._save_flir_data(images, exposure_times,timestamps)
+        self._save_flir_data(images, exposure_times,timestamps)
     
     def _thermal_data_processor(self):
         """红外数据处理线程"""
@@ -331,6 +366,7 @@ class AsyncCameraController:
     def _save_flir_data(self, images, exposure_times,timestamps):
         """保存FLIR数据"""
         # 按索引排序
+
         sorted_indices = sorted(images.keys())
         
         # 跳过第一张图像（索引0）
@@ -344,12 +380,9 @@ class AsyncCameraController:
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
         timestamp_list = np.array([timestamps[i] for i in valid_indices])
-    
-        # 保存数据（只传递图像和曝光时间）
         self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
-        # 重置
-        self.flir._disable_chunk_data(self.nodemap)
-        self.flir._reset_trigger(self.nodemap)
+
+
         print(f"已保存 {len(valid_indices)} 张FLIR图像")
     
     def cleanup(self):
@@ -374,9 +407,12 @@ class AsyncCameraController:
             if hasattr(self, 'executor') and self.executor:
                 try:
                     self.executor.shutdown(wait=True)
-                    print("线程池已关闭")
                 except Exception as e:
                     print(f"关闭线程池时出错: {e}")
+            # try:
+            #     self.flir_queue.join()  # 等待队列清空
+            # except:
+            #     pass
             
             # 清理相机资源
             if self.flir:

@@ -94,9 +94,7 @@ class AsyncCameraController:
             self.latest_thermal = thermal_img
             self.latest_thermal_stream_id = self._thermal_frame_count // self.stream_push_interval
             self.thermal_ready_for_stream = True
-            
-            # print(f"红外推流帧准备: 推流ID {self.latest_thermal_stream_id}")
-            
+    
             # 尝试同步推流
             self._try_sync_stream()
 

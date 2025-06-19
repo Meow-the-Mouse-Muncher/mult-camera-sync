@@ -182,7 +182,7 @@ def test_stream_piper():
 
 if __name__ == "__main__":
     # 指定 event.raw 文件路径
-    raw_file_path = "./data/2025_06_19_16_19_00/event/event.raw"  # 请修改为实际的文件路径
+    raw_file_path = "./data/2025_06_19_21_53_34/event/event.raw"  # 请修改为实际的文件路径
     
     # 配置参数
     use_triggers = False  # 是否使用触发器事件

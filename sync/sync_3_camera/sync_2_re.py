@@ -65,6 +65,9 @@ class AsyncEventThermalController:
         self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
         self.latest_thermal = None
         self.stream_lock = Lock()
+        
+        # 推流计数器相关属性（参考三相机逻辑）
+        self.stream_push_interval = STREAM_PUSH_INTERVAL
     
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
@@ -88,16 +91,15 @@ class AsyncEventThermalController:
                 ser.close()
 
     def _on_thermal_frame(self, thermal_img):
-        """红外相机实时回调"""
-        pass
-        # self.streamPiper_instance.push(thermal_img)
-        # with self.stream_lock:
-        #     self.latest_thermal = thermal_img.copy()
-        #     if self.latest_thermal is not None:
-        #         thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
-        #         self.streamPiper_instance.push(thermal_rgb) 
-        #         # time.sleep(0.5)  # 控制推流频率
-   
+        """红外相机实时回调 - 参考三相机逻辑"""
+        with self.stream_lock:
+            
+            self.latest_thermal = thermal_img
+            
+            # 推流红外图像（转换为RGB格式）
+            if self.latest_thermal is not None:
+                thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
+                self.streamPiper_instance.push(thermal_rgb)
     
     def initialize_cameras(self):
         """初始化所有相机"""
@@ -154,6 +156,7 @@ class AsyncEventThermalController:
         self.completed_cameras = 0
         self.capture_start_event.clear()
         self.capture_complete_event.clear()
+
         
         # 重置采集标志
         ACQUISITION_FLAG.value = 0
@@ -166,22 +169,33 @@ class AsyncEventThermalController:
             except queue.Empty:
                 break
         
-        # 启动数据处理线程
-        self.executor.submit(self._thermal_data_processor)
-        self.executor.submit(self._event_data_processor)
+        # 启动数据处理线程（保存Future引用）
+        thermal_processor_future = self.executor.submit(self._thermal_data_processor)
+        event_processor_future = self.executor.submit(self._event_data_processor)
         
         # 启动采集线程
-        self.executor.submit(self._thermal_capture_worker)
+        thermal_capture_future = self.executor.submit(self._thermal_capture_worker)
         # time.sleep(2.1)  # 确保红外相机先启动
-        self.executor.submit(self._prophesee_capture_worker)
+        prophesee_capture_future = self.executor.submit(self._prophesee_capture_worker)
         
         # 发送触发指令
         self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
         
         # 等待采集完成
-        self.capture_complete_event.wait(timeout=50)  # 50秒超时
+        completed = self.capture_complete_event.wait(timeout=50)  # 50秒超时
         
-    
+        if not completed:
+            print("采集超时！")
+            return False
+        
+        # 等待数据处理完成（参考三相机逻辑）
+        print("等待数据处理完成...")
+        try:
+            thermal_processor_future.result(timeout=15)  # 15秒超时
+            event_processor_future.result(timeout=10)   # 10秒超时
+            print("所有数据处理完成")
+        except Exception as e:
+            print(f"数据处理出错: {e}")
         
         return True
     
@@ -234,7 +248,7 @@ class AsyncEventThermalController:
                 self.capture_complete_event.set()
     
     def _thermal_data_processor(self):
-        """红外数据处理线程"""
+        """红外数据处理线程 - 参考三相机逻辑"""
         print("红外数据处理线程启动...")
         
         # 等待采集完成
@@ -242,14 +256,14 @@ class AsyncEventThermalController:
         
         # 红外相机数据处理已经在thermal_lib中的process_frames方法中处理
         # 这里添加额外的等待确保处理完全完成
-        # if self.thermal_cam:
-        #     print("等待红外相机内部处理完成...")
-        #     time.sleep(2)  # 给红外相机额外时间完成处理
+        if self.thermal_cam:
+            print("等待红外相机内部处理完成...")
+            time.sleep(2)  # 给红外相机额外时间完成处理
         
         print("红外数据处理线程完成")
     
     def _event_data_processor(self):
-        """事件数据处理线程"""
+        """事件数据处理线程 - 参考三相机逻辑"""
         print("事件数据处理线程启动...")
         
         # 等待采集完成后处理事件数据
@@ -271,7 +285,7 @@ class AsyncEventThermalController:
         print("事件数据处理线程完成")
     
     def cleanup(self):
-        """清理资源"""
+        """清理资源 - 参考三相机逻辑"""
         try:
             print("开始清理异步控制器资源...")
             
@@ -288,14 +302,7 @@ class AsyncEventThermalController:
             if not self.capture_complete_event.is_set():
                 self.capture_complete_event.set()
             
-            # 关闭线程池，等待所有任务完成
-            if hasattr(self, 'executor') and self.executor:
-                try:
-                    self.executor.shutdown(wait=True)
-                except Exception as e:
-                    print(f"关闭线程池时出错: {e}")
-            
-            # 清理相机资源
+            # 清理相机资源（在关闭线程池之前）
             if self.thermal_cam:
                 try:
                     self.thermal_cam.cleanup()
@@ -305,10 +312,18 @@ class AsyncEventThermalController:
             
             if self.prophesee_cam:
                 try:
-                    # 添加事件相机清理
                     print("事件相机资源已清理")
                 except Exception as e:
                     print(f"清理事件相机时出错: {e}")
+            
+            # 最后关闭线程池，设置较短的等待时间
+            if hasattr(self, 'executor') and self.executor:
+                try:
+                    print("正在关闭线程池...")
+                    self.executor.shutdown(wait=False)  # 不等待，强制关闭
+                    print("线程池已关闭")
+                except Exception as e:
+                    print(f"关闭线程池时出错: {e}")
                 
         except Exception as e:
             print(f"清理资源时出错: {e}")

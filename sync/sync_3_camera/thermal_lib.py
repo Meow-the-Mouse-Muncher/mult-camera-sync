@@ -207,7 +207,7 @@ class ThermalCamera:
         # 使用标准ThreadPoolExecutor，在工作函数内设置优先级
         if self.executor:
             self.executor.shutdown(wait=False)
-        self.executor = ThreadPoolExecutor(max_workers=2)  # 直接使用标准线程池
+        self.executor = ThreadPoolExecutor(max_workers=4)  # 直接使用标准线程池
         
         # 清空队列
         while not self.frame_queue.empty():

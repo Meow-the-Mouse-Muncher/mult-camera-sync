@@ -189,7 +189,6 @@ class AsyncFlirEventController:
                 # 清理相机
                 # 在相机去初始化之前进行重置操作
                 try:
-                    print("正在重置FLIR相机设置...")
                     self.flir._disable_chunk_data(nodemap)
                     self.flir._reset_trigger(nodemap)
                 except Exception as e:

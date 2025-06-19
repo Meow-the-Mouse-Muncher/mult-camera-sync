@@ -1,312 +1,248 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-红外相机测试脚本 (完美修复版)
-基于诊断结果的最终优化版本
-"""
-
 import sys
-import serial
 import time
+import datetime
 import os
-from threading import Thread, Event
+import serial
+from threading import Thread, Event, Lock
 import signal
+import queue
+from concurrent.futures import ThreadPoolExecutor
 from config import *
 from thermal_lib import ThermalCamera
-
-
-def signal_handler(sig, frame):
-    """处理Ctrl+C信号"""
-    print('\n正在清理资源并退出...')
-    RUNNING.value = 0
-    sys.exit(0)
-
-
-def send_pulse_command(num_pulses, frequency):  
-    """发送触发脉冲命令"""
-    try:
-        ser = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=SERIAL_TIMEOUT)
-        command = f"PULSE,{num_pulses},{frequency}\n"  
-        ser.write(command.encode())  
-        print(f"✅ 已发送触发命令: {command.strip()}")  
-        time.sleep(0.1)
-        return True
-    except serial.SerialException as e:
-        print(f"❌ 串口通信错误: {e}")
-        return False
-    finally:
-        if 'ser' in locals():
-            ser.close()
-
+from realtime_priority import print_system_info, setup_nice_thread
 
 def create_save_directories(base_path):
     """创建保存目录结构"""
     timestamp = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
     save_path = os.path.abspath(os.path.join(base_path, timestamp))
     
-    os.makedirs(os.path.join(save_path, 'thermal'), exist_ok=True)
-    print(f"📁 数据将保存至: {save_path}")
+    # 创建thermal子目录
+    thermal_dir = os.path.join(save_path, 'thermal')
+    if not os.path.exists(thermal_dir):
+        os.makedirs(thermal_dir)
+    
+    print(f"数据将保存至: {save_path}")
     return save_path
 
-
-def smart_camera_preparation(thermal_cam, target_delay=4.0):
-    """智能相机准备 - 动态检测相机就绪状态"""
-    print(f"🔧 智能相机准备中（目标：{target_delay}秒）...")
+class AsyncThermalController:
+    """红外相机异步控制器"""
     
-    start_time = time.time()
-    last_check_time = start_time
-    ready_signals = 0  # 就绪信号计数
-    
-    for i in range(int(target_delay), 0, -1):
-        print(f"   ⏰ 倒计时: {i}秒...")
+    def __init__(self, save_path):
+        self.save_path = save_path
+        self.executor = ThreadPoolExecutor(max_workers=6)  # 使用3个线程
         
-        # 每秒检查相机状态
-        check_start = time.time()
-        while time.time() - check_start < 1.0:
-            # 检查相机是否开始有反应（比如captured_count有变化）
-            if hasattr(thermal_cam, 'captured_count'):
-                current_count = thermal_cam.captured_count
-                # 如果在准备期间就有帧计数变化，说明相机很活跃
-                if current_count > 0:
-                    ready_signals += 1
-            
-            time.sleep(0.1)
-    
-    # 额外智能等待
-    if ready_signals > 0:
-        print(f"   ✅ 检测到相机活跃信号 ({ready_signals}个)")
-    else:
-        print(f"   ⚠️  未检测到相机活跃信号，额外等待0.5秒...")
-        time.sleep(0.5)
-    
-    total_prep_time = time.time() - start_time
-    print(f"   📊 实际准备时间: {total_prep_time:.2f}秒")
-    
-    return total_prep_time
-
-
-def optimized_monitor(thermal_cam, max_wait=50):
-    """优化的监控函数"""
-    start_time = time.time()
-    last_count = 0
-    frame_history = []
-    first_frame_time = None
-    
-    print("📊 开始优化监控...")
-    print(f"{'时间':<8} {'进度':<12} {'帧率':<8} {'状态':<10} {'备注'}")
-    print("-" * 55)
-    
-    while thermal_cam.is_capturing and (time.time() - start_time) < max_wait:
-        current_time = time.time()
-        current_count = thermal_cam.captured_count
-        elapsed = current_time - start_time
+        # 同步事件
+        self.capture_complete_event = Event()
         
-        # 每0.5秒检查一次，但只在有变化时输出详细信息
-        if current_count != last_count:
-            if first_frame_time is None:
-                first_frame_time = current_time
-                first_delay = current_time - start_time
-                print(f"{elapsed:.1f}s     首帧响应      -       就绪      延迟{first_delay:.2f}s")
-            
-            frame_history.append(current_time)
-            
-            # 计算当前帧率（最近5帧的平均）
-            if len(frame_history) >= 5:
-                recent_time = frame_history[-1] - frame_history[-5]
-                current_fps = 4.0 / recent_time if recent_time > 0 else 0
-            else:
-                current_fps = 0
-            
-            # 判断状态
-            progress_pct = (current_count / thermal_cam.target_count) * 100
-            
-            if progress_pct < 25:
-                stage = "启动"
-            elif progress_pct < 75:
-                stage = "稳定"
-            else:
-                stage = "收尾"
-            
-            # 只在重要节点输出信息
-            if current_count % 5 == 0 or current_count <= 3 or current_count >= thermal_cam.target_count - 3:
-                print(f"{elapsed:.1f}s     {current_count}/{thermal_cam.target_count:<8} {current_fps:.1f}fps   {stage:<8} 进展顺利")
-            
-            last_count = current_count
+        # 相机实例
+        self.thermal_cam = None
         
-        time.sleep(0.2)  # 更频繁检查
-    
-    # 最终统计
-    final_time = time.time() - start_time
-    final_count = thermal_cam.captured_count
-    target_count = thermal_cam.target_count
-    
-    print("-" * 55)
-    print("📈 采集完成统计:")
-    
-    if first_frame_time:
-        first_delay = first_frame_time - start_time
-        print(f"   首帧响应: {first_delay:.2f}秒")
+        # 状态锁
+        self.status_lock = Lock()
+        self.completed_cameras = 0
         
-        if first_delay <= 1.0:
-            print("   ✅ 首帧响应优秀")
-        elif first_delay <= 2.0:
-            print("   🟡 首帧响应良好")
-        else:
-            print("   ⚠️  首帧响应偏慢")
+    def signal_handler(self, sig, frame):
+        """处理Ctrl+C信号"""
+        print('\n正在清理资源并退出...')
+        RUNNING.value = 0
+        self.executor.shutdown(wait=False)
+        sys.exit(0)
     
-    success_rate = (final_count / target_count) * 100
-    print(f"   采集帧数: {final_count}/{target_count}")
-    print(f"   成功率: {success_rate:.1f}%")
-    print(f"   总耗时: {final_time:.2f}秒")
+    def send_pulse_command(self, num_pulses, frequency):  
+        """发送触发脉冲命令"""
+        try:
+            ser = serial.Serial(SERIAL_PORT, SERIAL_BAUDRATE, timeout=SERIAL_TIMEOUT)
+            command = f"PULSE,{num_pulses},{frequency}\n"  
+            ser.write(command.encode())  
+            print(f"已发送触发命令: {command.strip()}")  
+            time.sleep(0.1)  # 等待命令处理
+        except serial.SerialException as e:
+            print(f"串口通信错误: {e}")
+        finally:
+            if 'ser' in locals():
+                ser.close()
     
-    if len(frame_history) > 1:
-        avg_fps = (len(frame_history) - 1) / (frame_history[-1] - frame_history[0])
-        print(f"   平均帧率: {avg_fps:.2f}fps (目标: {FLIR_FRAMERATE}fps)")
+    def initialize_cameras(self):
+        """初始化红外相机"""
+        future = self.executor.submit(self._init_thermal)
+        return future.result()
     
-    # 综合评价
-    if success_rate >= 98:
-        grade = "🟢 完美"
-    elif success_rate >= 95:
-        grade = "🟢 优秀"
-    elif success_rate >= 90:
-        grade = "🟡 良好"
-    elif success_rate >= 80:
-        grade = "🟠 一般"
-    else:
-        grade = "🔴 需要改进"
+    def _init_thermal(self):
+        """初始化红外相机"""
+        try:
+            self.thermal_cam = ThermalCamera()
+            # 不设置推流回调，专注于数据采集
+            if not self.thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
+                print("红外相机初始化失败")
+                return False
+            
+            if not self.thermal_cam.configure_camera(THERMAL_TEMP_SEGMENT, NUM_IMAGES, self.save_path):
+                print("红外相机配置失败")
+                return False
+            
+            print("红外相机初始化成功")
+            return True
+        except Exception as e:
+            print(f"红外相机初始化错误: {e}")
+            return False
     
-    print(f"   综合评价: {grade}")
+    def start_capture(self):
+        """开始异步采集"""
+        print("开始红外相机采集...")
+        
+        # 重置状态
+        self.completed_cameras = 0
+        self.capture_complete_event.clear()
+        
+        # 重置采集标志
+        RUNNING.value = 1
+        
+        # 启动数据处理线程（占位）
+        self.executor.submit(self._thermal_data_processor)
+        
+        # 启动采集线程
+        self.executor.submit(self._thermal_capture_worker)
+        
+        # 关键修复：发送触发信号
+        # 使用红外相机的帧率而不是FLIR的帧率
+        self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
+        
+        # 修复：正确计算超时时间
+        expected_time = (NUM_IMAGES / FLIR_FRAMERATE) * 1.5 + 20 
+        timeout = max(expected_time, 30)  # 至少60秒
+        print(f"预期采集时间: {expected_time:.1f}秒, 设置超时: {timeout:.1f}秒")
+        
+        # 等待采集完成
+        completed = self.capture_complete_event.wait(timeout=timeout)
+        
+        if not completed:
+            print("采集超时！")
+            RUNNING.value = 0
+            return False
+        
+        return True
     
-    return success_rate >= 95
-
+    def _thermal_capture_worker(self):
+        """红外相机采集工作线程"""
+        try:
+            # 设置线程优先级和CPU绑定
+            setup_nice_thread(
+                nice_value=-20,        # 高优先级
+                cpu_list=[0,1,2,3,4, 5]       # 绑定到ARM核心，避免和主程序冲突
+            )
+            
+            # 启动红外相机采集
+            if self.thermal_cam.start_capture():
+                # 等待采集和处理完全完成
+                self.thermal_cam.wait_for_completion()
+                print("红外相机数据处理完成")
+            
+            # 标记红外相机完成（包括处理）
+            self._mark_camera_complete()
+            
+        except Exception as e:
+            print(f"红外相机采集线程错误: {e}")
+            RUNNING.value = 0
+            # 即使出错也标记完成，避免主线程无限等待
+            self._mark_camera_complete()
+    
+    def _thermal_data_processor(self):
+        """红外数据处理线程 - 占位线程"""
+        # 等待采集完成
+        self.capture_complete_event.wait()
+        
+        # 红外相机数据处理已经在thermal_lib中处理
+        # 这里是占位线程，确保线程池资源分配
+        if self.thermal_cam:
+            time.sleep(1)  # 给红外相机额外时间完成处理
+    
+    def _mark_camera_complete(self):
+        """标记相机完成采集"""
+        with self.status_lock:
+            self.completed_cameras += 1
+            if self.completed_cameras >= 1:  # 只有一个红外相机
+                print("红外相机采集完成！")
+                self.capture_complete_event.set()
+    
+    def cleanup(self):
+        """清理资源"""
+        try:
+            # 停止所有采集
+            RUNNING.value = 0
+            
+            # 设置采集完成事件
+            if not self.capture_complete_event.is_set():
+                self.capture_complete_event.set()
+            
+            # 清理红外相机资源
+            if self.thermal_cam:
+                try:
+                    self.thermal_cam.cleanup()
+                except Exception as e:
+                    print(f"清理红外相机时出错: {e}")
+            
+            # 关闭线程池，等待所有任务完成
+            if hasattr(self, 'executor') and self.executor:
+                try:
+                    self.executor.shutdown(wait=True)
+                except Exception as e:
+                    print(f"关闭线程池时出错: {e}")
+                    
+        except Exception as e:
+            print(f"清理资源时出错: {e}")
 
 def main():
-    """主函数 - 完美修复版本"""
-    print("=" * 65)
-    print("🎯 红外相机测试脚本 (完美修复版)")
-    print("=" * 65)
-    print(f"📋 配置信息:")
-    print(f"   目标帧数: {NUM_IMAGES} @ {FLIR_FRAMERATE}fps")
-    print(f"   理论时间: {NUM_IMAGES/FLIR_FRAMERATE:.1f}秒")
-    print(f"   红外相机: {THERMAL_CAMERA_IP}")
-    print(f"   分辨率: {THERMAL_WIDTH}x{THERMAL_HEIGHT}")
-    print("=" * 65)
+    """主函数"""
+    print("=== 红外相机多线程采集系统 ===")
     
-    # 初始化
+    # 检查系统实时权限
+    has_rt_perms = print_system_info()
+    
+    if not has_rt_perms:
+        print("建议以root权限运行以获得最佳性能")
+    
+    # 初始化共享变量
     RUNNING.value = 1
-    ACQUISITION_FLAG.value = 0
-    signal.signal(signal.SIGINT, signal_handler)
     
+    # 创建保存目录
     save_path = create_save_directories(BASE_DIR)
-    thermal_cam = None
+    
+    # 创建异步控制器
+    controller = AsyncThermalController(save_path)
+    
+    # 注册信号处理
+    signal.signal(signal.SIGINT, controller.signal_handler)
     
     try:
-        print("\n🔌 第1步: 初始化相机...")
-        thermal_cam = ThermalCamera()
-        
-        if not thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
-            print("❌ 相机连接失败")
-            return False
-        print("✅ 相机连接成功")
-        
-        if not thermal_cam.configure_camera(THERMAL_TEMP_SEGMENT, NUM_IMAGES, save_path):
-            print("❌ 相机配置失败")
-            return False
-        print("✅ 相机配置成功")
-        
-        print("\n🚀 第2步: 启动采集...")
-        if not thermal_cam.start_capture():
-            print("❌ 采集启动失败")
-            return False
-        print("✅ 采集已启动")
-        
-        # 启动监控线程
-        monitor_complete = Event()
-        monitor_result = {'success': False}
-        
-        def monitor_wrapper():
-            result = optimized_monitor(thermal_cam, 55)
-            monitor_result['success'] = result
-            monitor_complete.set()
-        
-        monitor_thread = Thread(target=monitor_wrapper)
-        monitor_thread.start()
-        
-        # print("\n⏰ 第3步: 智能准备等待...")
-        # prep_time = smart_camera_preparation(thermal_cam, 4.0)
-        
-        print("\n📡 第4步: 发送触发命令...")
-        trigger_time = time.time()
-        if not send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE):
-            print("❌ 触发命令发送失败")
+        # 初始化相机
+        if not controller.initialize_cameras():
+            print("相机初始化失败")
             return False
         
-        # 等待监控完成
-        print("\n📊 第5步: 监控采集过程...")
-        monitor_complete.wait(timeout=60)
-        monitor_thread.join(timeout=5)
+        # 开始异步采集
+        if not controller.start_capture():
+            print("采集失败")
+            return False
         
-        print("\n🔄 第6步: 数据处理...")
-        thermal_cam.wait_for_completion()
+        time.sleep(1)
+        print("采集完成")
+        return True
         
-        # 最终结果
-        final_count = thermal_cam.captured_count
-        target_count = thermal_cam.target_count
-        success_rate = (final_count / target_count) * 100
-        
-        print("\n" + "=" * 65)
-        print("🎯 最终测试结果:")
-        print(f"   📊 采集成功: {final_count}/{target_count} 帧")
-        print(f"   📈 成功率: {success_rate:.1f}%")
-        
-        # 根据成功率给出结论
-        if success_rate >= 98:
-            print("   🎉 完美成功！问题已彻底解决")
-            print("   💡 建议：可以将此配置应用到生产环境")
-            result = True
-        elif success_rate >= 95:
-            print("   🟢 优秀！基本解决了问题")
-            print("   💡 建议：此配置可用于正常使用")
-            result = True
-        elif success_rate >= 90:
-            print("   🟡 良好，有显著改善")
-            print("   💡 建议：可能需要再微调准备时间")
-            result = True
-        else:
-            print("   🟠 仍需改进")
-            print("   💡 建议：检查硬件连接或增加更多准备时间")
-            result = False
-        
-        print("=" * 65)
-        return result
-        
-    except KeyboardInterrupt:
-        print("\n⚠️  用户中断测试")
-        return False
     except Exception as e:
-        print(f"\n❌ 程序错误: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"程序运行错误: {e}")
         return False
-    
     finally:
-        if thermal_cam:
-            print("\n🧹 清理资源...")
-            thermal_cam.cleanup()
-            print("✅ 清理完成")
-
+        controller.cleanup()
+        
+        # 最终清理SDK
+        try:
+            from thermal_lib import ensure_sdk_cleanup
+            ensure_sdk_cleanup()
+        except Exception as e:
+            print(f"清理SDK全局资源时出错: {e}")
 
 if __name__ == '__main__':
-    print(f"🕐 开始测试 - {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    success = main()
-    
-    end_time = time.strftime('%Y-%m-%d %H:%M:%S')
-    if success:
-        print(f"🎉 测试成功完成 - {end_time}")
-        print("💡 红外相机采集问题已解决，可以应用到您的三相机同步脚本中")
+    if main():
         sys.exit(0)
     else:
-        print(f"❌ 测试未达到预期 - {end_time}")
-        print("💡 建议检查硬件连接或联系技术支持")
         sys.exit(1)

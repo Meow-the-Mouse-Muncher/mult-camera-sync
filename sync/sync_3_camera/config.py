@@ -2,7 +2,7 @@ from multiprocessing import Value
 
 STREAM_PUSH_INTERVAL = 5  # 每5帧推流一次，可根据需要修改
 # FLIR相机配置参数
-FLIR_FRAMERATE = 12  # fps
+FLIR_FRAMERATE = 10  # fps
 FLIR_EXPOSURE_TIME = 5000  # us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置

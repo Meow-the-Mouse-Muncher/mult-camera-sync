@@ -1,15 +1,22 @@
 import sys
 import serial
 import time
+import datetime
 import os
 from threading import Thread, Event, Lock
 import signal
 import queue
 import numpy as np
+import cv2 as cv
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 from event_lib import *
 from flir_lib import FlirCamera
+from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
+
+# 添加推流支持
+os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+from lib import streamPiper
 
 def create_save_directories(base_path):
     """创建保存目录结构"""
@@ -34,7 +41,7 @@ class AsyncFlirEventController:
     
     def __init__(self, save_path):
         self.save_path = save_path
-        self.executor = ThreadPoolExecutor(max_workers=6)  # 增加到6个线程
+        self.executor = ThreadPoolExecutor(max_workers=6)  # 使用6个线程
         
         # 同步事件
         self.capture_start_event = Event()
@@ -46,10 +53,20 @@ class AsyncFlirEventController:
         
         # 数据队列
         self.flir_queue = queue.Queue()
+        self.event_queue = queue.Queue()
         
         # 状态锁
         self.status_lock = Lock()
         self.completed_cameras = 0
+        
+        # 添加推流相关属性
+        self.stream_width = 600
+        self.stream_height = 600
+        self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
+        self.latest_flir = None
+        self.stream_lock = Lock()
+        self.stream_push_interval = STREAM_PUSH_INTERVAL
+        self._stream_frame_count = 0
         
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
@@ -71,9 +88,16 @@ class AsyncFlirEventController:
         finally:
             if 'ser' in locals():
                 ser.close()
+
+    def _try_stream(self):
+        """推送FLIR图像"""
+        if self.latest_flir is not None:
+            flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+            self.streamPiper_instance.push(flir_rgb)
     
     def initialize_cameras(self):
-        """并行初始化相机"""
+        """初始化所有相机"""
+        # 使用线程池并行初始化
         futures = []
         
         # FLIR相机初始化
@@ -93,6 +117,7 @@ class AsyncFlirEventController:
             if not self.flir.initialize():
                 print("FLIR相机初始化失败")
                 return False
+            print("FLIR相机初始化成功")
             return True
         except Exception as e:
             print(f"FLIR相机初始化错误: {e}")
@@ -105,6 +130,7 @@ class AsyncFlirEventController:
             if not self.prophesee_cam.config_prophesee():
                 print("Prophesee相机初始化失败")
                 return False
+            print("Prophesee相机初始化成功")
             return True
         except Exception as e:
             print(f"事件相机初始化错误: {e}")
@@ -112,16 +138,18 @@ class AsyncFlirEventController:
 
     def start_capture(self):
         """开始异步采集"""
-        print("开始FLIR和事件相机异步采集...")
+        print("开始异步多线程采集...")
         
         # 重置状态
         self.completed_cameras = 0
         self.capture_start_event.clear()
         self.capture_complete_event.clear()
+        # 重置推流计数器
+        self._stream_frame_count = 0
         
         # 重置采集标志
         ACQUISITION_FLAG.value = 0
-        RUNNING.value = 1
+        RUNNING.value = 1  # 确保RUNNING标志被重置
         
         # 清空队列
         while not self.flir_queue.empty():
@@ -136,6 +164,7 @@ class AsyncFlirEventController:
         
         # 配置FLIR相机
         for i, cam in enumerate(self.flir.cam_list):
+            print(f'正在配置FLIR相机 {i}...')
             try:
                 cam.Init()
                 nodemap = cam.GetNodeMap()
@@ -147,21 +176,25 @@ class AsyncFlirEventController:
                 cam.BeginAcquisition()
                 print("FLIR相机配置成功")
                 
-                # 启动所有采集线程
-                self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                # 启动采集线程
                 self.executor.submit(self._prophesee_capture_worker)
-                
-                # 短暂延时确保所有线程就绪
-                time.sleep(0.2)
+                self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
-                print("发送触发指令...")
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
                 
                 # 等待采集完成
-                self.capture_complete_event.wait(timeout=90)
+                self.capture_complete_event.wait(timeout=50)  # 50秒超时
                 
                 # 清理相机
+                # 在相机去初始化之前进行重置操作
+                try:
+                    print("正在重置FLIR相机设置...")
+                    self.flir._disable_chunk_data(nodemap)
+                    self.flir._reset_trigger(nodemap)
+                except Exception as e:
+                    print(f"重置FLIR相机设置时出错: {e}")
+                    
                 if cam.IsStreaming():
                     cam.EndAcquisition()
                 cam.DeInit()
@@ -177,10 +210,13 @@ class AsyncFlirEventController:
     
     def _flir_capture_worker(self, cam, nodemap):
         """FLIR相机采集工作线程"""
+        setup_nice_thread(
+            nice_value=-15,        # 高优先级
+            cpu_list=[0, 1]       # 绑定到Denver核心
+        )
         try:
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
-                    print("接收到停止信号，FLIR采集线程退出")
                     break
                     
                 image_result = cam.GetNextImage(1000)
@@ -188,6 +224,8 @@ class AsyncFlirEventController:
                     print(f'FLIR图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()
                     continue
+                
+                capture_time = datetime.datetime.now().timestamp()
                 
                 # 快速获取数据并放入队列
                 image_data = image_result.GetNDArray().copy()
@@ -197,8 +235,16 @@ class AsyncFlirEventController:
                     'index': i,
                     'data': image_data,
                     'exposure_time': exposure_time,
-                    'timestamp': 0  # 不再收集真实时间戳，使用占位符
+                    'timestamp': capture_time
                 })
+                
+                # 添加推流功能
+                with self.stream_lock:
+                    self._stream_frame_count += 1
+                    if self._stream_frame_count % self.stream_push_interval == 0:
+                        flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                        self.latest_flir = flir_img
+                        self._try_stream()
                 
                 image_result.Release()
             
@@ -208,7 +254,7 @@ class AsyncFlirEventController:
             ACQUISITION_FLAG.value = 1
             
             # 标记FLIR采集完成
-            self._mark_camera_complete("FLIR")
+            self._mark_camera_complete()
             
         except Exception as e:
             print(f"FLIR采集线程错误: {e}")
@@ -222,35 +268,35 @@ class AsyncFlirEventController:
             print("事件相机采集完成")
             
             # 标记事件相机采集完成
-            self._mark_camera_complete("事件")
+            self._mark_camera_complete()
             
         except Exception as e:
             print(f"事件相机采集线程错误: {e}")
             RUNNING.value = 0
 
-    def _mark_camera_complete(self, camera_name):
+    def _mark_camera_complete(self):
         """标记相机完成采集"""
         with self.status_lock:
             self.completed_cameras += 1
+            print(f"相机完成采集进度: {self.completed_cameras}/2")
             if self.completed_cameras >= 2:  # 两个相机都完成
                 print("所有相机采集完成！")
                 self.capture_complete_event.set()
     
     def _flir_data_processor(self):
         """FLIR数据处理线程"""
-        print("FLIR数据处理线程启动...")
         images = {}
         exposure_times = {}
         timestamps = {}
         
         while True:
             try:
-                # 从队列获取数据，超时10秒
-                data = self.flir_queue.get(timeout=10)
+                # 从队列获取数据，超时5秒
+                data = self.flir_queue.get(timeout=5)
                 
                 if data is None:  # 结束信号
                     break
-                
+                    
                 # 存储数据
                 idx = data['index']
                 images[idx] = data['data']
@@ -262,14 +308,11 @@ class AsyncFlirEventController:
             except queue.Empty:
                 # 检查是否应该退出
                 if self.capture_complete_event.is_set():
-                    print("采集完成，FLIR数据处理线程准备退出")
                     break
                 continue
-        
+                
         # 处理和保存数据
-        if images:
-            print("FLIR数据处理完成，准备保存数据...")
-            self._save_flir_data(images, exposure_times, timestamps)
+        self._save_flir_data(images, exposure_times, timestamps)
     
     def _event_data_processor(self):
         """事件数据处理线程"""
@@ -284,8 +327,6 @@ class AsyncFlirEventController:
                 print("未检测到有效触发信号")
         except Exception as e:
             print(f"事件相机数据处理失败: {e}")
-        
-        print("事件数据处理线程完成")
     
     def _save_flir_data(self, images, exposure_times, timestamps):
         """保存FLIR数据"""
@@ -302,15 +343,16 @@ class AsyncFlirEventController:
         # 准备数据数组
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
+        timestamp_list = np.array([timestamps[i] for i in valid_indices])
         
-        # 保存数据（只传递图像和曝光时间）
-        self.flir._save_data(image_array, exposure_array, self.save_path)
+        # 保存数据（传递时间戳）
+        self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
         print(f"已保存 {len(valid_indices)} 张FLIR图像")
     
     def cleanup(self):
         """清理资源"""
         try:
-            print("开始清理FLIR和事件相机控制器资源...")
+            print("开始清理异步控制器资源...")
             
             # 停止所有采集
             RUNNING.value = 0
@@ -325,7 +367,7 @@ class AsyncFlirEventController:
             if not self.capture_complete_event.is_set():
                 self.capture_complete_event.set()
             
-            # 关闭线程池
+            # 关闭线程池，等待所有任务完成
             if hasattr(self, 'executor') and self.executor:
                 try:
                     self.executor.shutdown(wait=True)
@@ -342,7 +384,7 @@ class AsyncFlirEventController:
             
             if self.prophesee_cam:
                 try:
-                    # 事件相机清理
+                    # 添加事件相机清理
                     print("事件相机资源已清理")
                 except Exception as e:
                     print(f"清理事件相机时出错: {e}")
@@ -351,7 +393,16 @@ class AsyncFlirEventController:
             print(f"清理资源时出错: {e}")
 
 def main():
-    """主函数"""
+    """主函数 - Xavier NX优化版实时优先级支持"""
+    print("=== 双相机同步采集系统 (Xavier NX优化) ===")
+    
+    # 检查系统实时权限
+    has_rt_perms = print_system_info()
+    
+    if not has_rt_perms:
+        print("建议以root权限运行以获得最佳性能: sudo python3 sync_2_fe.py")
+        print("继续运行（性能可能受限）...")
+    
     # 初始化共享变量
     RUNNING.value = 1
     ACQUISITION_FLAG.value = 0
@@ -367,7 +418,7 @@ def main():
     
     try:
         # 并行初始化相机
-        print("开始初始化相机...")
+        print("\n正在初始化相机...")
         if not controller.initialize_cameras():
             print("相机初始化失败")
             return False
@@ -375,14 +426,14 @@ def main():
         print("所有相机初始化成功")
         
         # 开始异步采集
-        print("开始异步采集...")
+        print("\n开始异步采集...")
         if not controller.start_capture():
             print("采集失败")
             return False
         
         # 短暂延时确保所有处理完成
         time.sleep(1)
-        print("采集完成")
+        print("\n采集完成")
         return True
         
     except Exception as e:

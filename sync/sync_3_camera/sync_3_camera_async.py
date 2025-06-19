@@ -48,7 +48,21 @@ class AsyncCameraController:
         self.latest_flir = None
         self.latest_thermal = None
         self.stream_lock = Lock()
+
+        self.stream_push_interval = STREAM_PUSH_INTERVAL
         
+        # 分别为每个相机设置独立的计数器
+        self._flir_frame_count = 0
+        self._thermal_frame_count = 0
+        
+        # 记录最新的推流帧ID
+        self.latest_flir_stream_id = -1
+        self.latest_thermal_stream_id = -1
+        
+        # 推流状态标记
+        self.flir_ready_for_stream = False
+        self.thermal_ready_for_stream = False
+
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
         print('\n正在清理资源并退出...')
@@ -72,20 +86,55 @@ class AsyncCameraController:
 
 
     def _on_thermal_frame(self, thermal_img):
+        """红外相机实时回调 - 修改为同步推流逻辑"""
         with self.stream_lock:
+            # thermal_img已经是推流帧处理后的结果
+            self._thermal_frame_count += self.stream_push_interval  # 同步计数器
+            
             self.latest_thermal = thermal_img
-            self._try_stream()
+            self.latest_thermal_stream_id = self._thermal_frame_count // self.stream_push_interval
+            self.thermal_ready_for_stream = True
+            
+            # print(f"红外推流帧准备: 推流ID {self.latest_thermal_stream_id}")
+            
+            # 尝试同步推流
+            self._try_sync_stream()
 
-    def _try_stream(self):
-        """如果两路图像都准备好，则拼接并推送"""
-        if self.latest_flir is not None and self.latest_thermal is not None:
-            half = self.stream_width // 2
-            # 创建灰度拼接画布
-            combined = np.zeros((self.stream_height, self.stream_width), dtype=np.uint8)
-            combined[:, :half] = self.latest_flir[:, :half]
-            combined[:, half:] = self.latest_thermal[:, half:]
-            self.streamPiper_instance.push(combined)
-    
+    def _try_sync_stream(self):
+        """同步推流 - 只有两个相机都准备好才推流"""
+        if (self.flir_ready_for_stream and self.thermal_ready_for_stream and
+            self.latest_flir is not None and self.latest_thermal is not None and
+            self.latest_flir_stream_id > 0 and self.latest_thermal_stream_id > 0):
+            
+            # 检查两个推流ID是否匹配或相近
+            stream_id_diff = abs(self.latest_flir_stream_id - self.latest_thermal_stream_id)
+            
+            if stream_id_diff <= 1:  # 允许1个推流周期的差距
+                # 执行推流
+                half = self.stream_width // 2
+                flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+                thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
+                combined = np.zeros((self.stream_height, self.stream_width, 3), dtype=np.uint8)
+                combined[:, :half] = flir_rgb[:, :half, :]
+                combined[:, half:] = thermal_rgb[:, half:, :]
+                self.streamPiper_instance.push(combined)
+                
+                # print(f"✓ 同步推流成功: FLIR-ID{self.latest_flir_stream_id} + 红外-ID{self.latest_thermal_stream_id}")
+                
+                # 重置推流状态，等待下一次同步
+                self.flir_ready_for_stream = False
+                self.thermal_ready_for_stream = False
+            else:
+                # print(f"⚠ 推流ID差距过大: FLIR-ID{self.latest_flir_stream_id}, 红外-ID{self.latest_thermal_stream_id}, 差距:{stream_id_diff}")
+                
+                # 如果差距过大，重置较旧的那个，等待重新同步
+                if self.latest_flir_stream_id < self.latest_thermal_stream_id:
+                    print("重置FLIR推流状态，等待下一个FLIR推流帧")
+                    self.flir_ready_for_stream = False
+                else:
+                    print("重置红外推流状态，等待下一个红外推流帧")
+                    self.thermal_ready_for_stream = False
+
     def initialize_cameras(self):
         """初始化所有相机"""
         # 使用线程池并行初始化
@@ -158,6 +207,14 @@ class AsyncCameraController:
         self.capture_start_event.clear()
         self.capture_complete_event.clear()
         
+        # 重置推流相关计数器和状态
+        self._flir_frame_count = 0
+        self._thermal_frame_count = 0
+        self.latest_flir_stream_id = -1
+        self.latest_thermal_stream_id = -1
+        self.flir_ready_for_stream = False
+        self.thermal_ready_for_stream = False
+        
         # 重置采集标志
         ACQUISITION_FLAG.value = 0
         RUNNING.value = 1  # 确保RUNNING标志被重置
@@ -171,7 +228,7 @@ class AsyncCameraController:
         
         # 启动数据处理线程
         self.executor.submit(self._flir_data_processor)
-        self.executor.submit(self._thermal_data_processor)
+        # self.executor.submit(self._thermal_data_processor)
         self.executor.submit(self._event_data_processor)
         
         # 配置FLIR相机
@@ -225,9 +282,9 @@ class AsyncCameraController:
     def _flir_capture_worker(self, cam, nodemap):
         """FLIR相机采集工作线程"""
         setup_nice_thread(
-                nice_value=-15,        # 高优先级
-                cpu_list=[0, 1]       # 绑定到Denver核心
-            )
+            nice_value=-15,        # 高优先级
+            cpu_list=[0, 1]       # 绑定到Denver核心
+        )
         try:
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
@@ -238,8 +295,8 @@ class AsyncCameraController:
                     print(f'FLIR图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()
                     continue
+                    
                 capture_time = datetime.datetime.now().timestamp() 
-                # 快速获取数据并放入队列
                 image_data = image_result.GetNDArray().copy()
                 _, exposure_time = self.flir.read_chunk_data(image_result)
                 
@@ -249,26 +306,38 @@ class AsyncCameraController:
                     'exposure_time': exposure_time,
                     'timestamp': capture_time 
                 })
-                flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
-                # 保持灰度，不转RGB
+                
+                # 修改：使用独立的FLIR计数器，只在推流帧上处理
                 with self.stream_lock:
-                    self.latest_flir = flir_img
-                    self._try_stream()
+                    self._flir_frame_count += 1
+                    
+                    # 检查是否到达推流帧
+                    if self._flir_frame_count % self.stream_push_interval == 0:
+                        # print(f"FLIR推流帧处理: 第{self._flir_frame_count}帧")
+                        
+                        # 只在推流帧上做resize
+                        flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                        self.latest_flir = flir_img
+                        self.latest_flir_stream_id = self._flir_frame_count // self.stream_push_interval
+                        self.flir_ready_for_stream = True
+                        
+                        # print(f"FLIR推流帧准备: 推流ID {self.latest_flir_stream_id}")
+                        
+                        # 尝试同步推流
+                        self._try_sync_stream()
+                    # 其他帧完全跳过图像处理
                 
                 image_result.Release()
-            
-            print(f"FLIR相机采集完成，共采集 {NUM_IMAGES} 张图像")
-            
-            # 设置采集标志，通知事件相机停止记录
             ACQUISITION_FLAG.value = 1
             
             # 标记FLIR采集完成
             self._mark_camera_complete()
-            
+             
         except Exception as e:
             print(f"FLIR采集线程错误: {e}")
             RUNNING.value = 0
-    
+            
+
     def _prophesee_capture_worker(self):
         """事件相机采集工作线程"""
         try:
@@ -334,6 +403,7 @@ class AsyncCameraController:
                 timestamps[idx] = data['timestamp']  
 
                 self.flir_queue.task_done()
+                # print(f"FLIR图像 {idx} 处理完成")
                 
             except queue.Empty:
                 # 检查是否应该退出
@@ -366,6 +436,7 @@ class AsyncCameraController:
     def _save_flir_data(self, images, exposure_times,timestamps):
         """保存FLIR数据"""
         # 按索引排序
+        
 
         sorted_indices = sorted(images.keys())
         
@@ -380,6 +451,7 @@ class AsyncCameraController:
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
         timestamp_list = np.array([timestamps[i] for i in valid_indices])
+        # print("正在保存FLIR图像数据...")
         self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
 
 

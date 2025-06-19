@@ -1,15 +1,22 @@
 import sys
 import serial
 import time
+import datetime
 import os
 from threading import Thread, Event, Lock
 import signal
 import queue
 import numpy as np
+import cv2 as cv
 from concurrent.futures import ThreadPoolExecutor
 from config import *
 from flir_lib import FlirCamera
 from thermal_lib import ThermalCamera
+from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
+
+# 添加推流支持
+os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+from lib import streamPiper
 
 def create_save_directories(base_path):
     """创建保存目录结构"""
@@ -34,7 +41,7 @@ class AsyncFlirThermalController:
     
     def __init__(self, save_path):
         self.save_path = save_path
-        self.executor = ThreadPoolExecutor(max_workers=6)  # 增加到6个线程
+        self.executor = ThreadPoolExecutor(max_workers=6)  # 使用6个线程
         
         # 同步事件
         self.capture_start_event = Event()
@@ -46,10 +53,23 @@ class AsyncFlirThermalController:
         
         # 数据队列
         self.flir_queue = queue.Queue()
+        self.thermal_queue = queue.Queue()
         
         # 状态锁
         self.status_lock = Lock()
         self.completed_cameras = 0
+        
+        # 推流相关属性
+        self.stream_width = 600
+        self.stream_height = 600
+        self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
+        self.latest_flir = None
+        self.latest_thermal = None
+        self.stream_lock = Lock()
+        
+        # 推流计数器
+        self.stream_push_interval = STREAM_PUSH_INTERVAL
+        self._stream_frame_count = 0
         
     def signal_handler(self, sig, frame):
         """处理Ctrl+C信号"""
@@ -71,9 +91,28 @@ class AsyncFlirThermalController:
         finally:
             if 'ser' in locals():
                 ser.close()
+
+    def _on_thermal_frame(self, thermal_img):
+        """红外相机实时回调"""
+        pass
+        # with self.stream_lock:
+        #     self.latest_thermal = thermal_img
+        #     self._try_stream()
+
+    def _try_stream(self):
+        """如果两路图像都准备好，则拼接并推送"""
+        if self.latest_flir is not None and self.latest_thermal is not None:
+            half = self.stream_width // 2
+            flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+            thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
+            combined = np.zeros((self.stream_height, self.stream_width, 3), dtype=np.uint8)
+            combined[:, :half] = flir_rgb[:, :half, :]
+            combined[:, half:] = thermal_rgb[:, half:, :]
+            self.streamPiper_instance.push(combined)
     
     def initialize_cameras(self):
-        """并行初始化相机"""
+        """初始化所有相机"""
+        # 使用线程池并行初始化
         futures = []
         
         # FLIR相机初始化
@@ -93,6 +132,7 @@ class AsyncFlirThermalController:
             if not self.flir.initialize():
                 print("FLIR相机初始化失败")
                 return False
+            print("FLIR相机初始化成功")
             return True
         except Exception as e:
             print(f"FLIR相机初始化错误: {e}")
@@ -102,58 +142,30 @@ class AsyncFlirThermalController:
         """初始化红外相机"""
         try:
             self.thermal_cam = ThermalCamera()
+            self.thermal_cam.set_realtime_callback(self._on_thermal_frame)
             if not self.thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
-                print("红外相机连接失败")
+                print("红外相机初始化失败")
                 return False
             
-            # 配置红外相机
             if not self.thermal_cam.configure_camera(THERMAL_TEMP_SEGMENT, NUM_IMAGES, self.save_path):
                 print("红外相机配置失败")
                 return False
             
+            print("红外相机初始化成功")
             return True
         except Exception as e:
             print(f"红外相机初始化错误: {e}")
             return False
 
-    def smart_thermal_preparation(self, thermal_cam, target_delay=3.0):
-        """智能红外相机准备 - 借鉴测试脚本的成功策略"""
-        print(f"🔧 红外相机智能准备中（{target_delay}秒）...")
-        
-        start_time = time.time()
-        ready_signals = 0
-        
-        for i in range(int(target_delay), 0, -1):
-            print(f"   ⏰ 红外相机准备倒计时: {i}秒...")
-            
-            # 检查相机状态
-            check_start = time.time()
-            while time.time() - check_start < 1.0:
-                if hasattr(thermal_cam, 'captured_count'):
-                    if thermal_cam.captured_count > 0:
-                        ready_signals += 1
-                time.sleep(0.1)
-        
-        # 额外等待确保完全稳定
-        if ready_signals > 0:
-            print(f"   ✅ 检测到红外相机活跃信号 ({ready_signals}个)")
-        else:
-            print(f"   ⚠️  未检测到活跃信号，额外等待0.5秒...")
-            time.sleep(0.5)
-        
-        total_prep_time = time.time() - start_time
-        print(f"   📊 红外相机准备完成: {total_prep_time:.2f}秒")
-        
-        return total_prep_time
-
     def start_capture(self):
         """开始异步采集"""
-        print("开始FLIR和红外相机异步采集...")
+        print("开始异步多线程采集...")
         
         # 重置状态
         self.completed_cameras = 0
         self.capture_start_event.clear()
         self.capture_complete_event.clear()
+        self._stream_frame_count = 0
         
         # 重置采集标志
         ACQUISITION_FLAG.value = 0
@@ -167,11 +179,12 @@ class AsyncFlirThermalController:
                 break
         
         # 启动数据处理线程
-        self.executor.submit(self._flir_data_processor)
-        self.executor.submit(self._thermal_data_processor)
+        flir_processor_future = self.executor.submit(self._flir_data_processor)
+        thermal_processor_future = self.executor.submit(self._thermal_data_processor)
         
         # 配置FLIR相机
         for i, cam in enumerate(self.flir.cam_list):
+            print(f'正在配置FLIR相机 {i}...')
             try:
                 cam.Init()
                 nodemap = cam.GetNodeMap()
@@ -181,24 +194,40 @@ class AsyncFlirThermalController:
                     return False
                 
                 cam.BeginAcquisition()
+                print("FLIR相机配置成功")
                 
                 # 启动采集线程
-                self.executor.submit(self._thermal_capture_worker)
-                
-                
-                # 关键修改：使用成功的智能等待策略
-                print("📡 应用测试脚本的成功策略...")
-                self.smart_thermal_preparation(self.thermal_cam, 1.0)
-                self.executor.submit(self._flir_capture_worker, cam, nodemap)
-                print(f"发送相机触发指令，采集 {NUM_IMAGES} 张图像...")
+                thermal_capture_future = self.executor.submit(self._thermal_capture_worker)
+                # time.sleep(2.1)  # 确保红外相机先启动
+                flir_capture_future = self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
                 
                 # 等待采集完成
-                self.capture_complete_event.wait(timeout=90)
+                completed = self.capture_complete_event.wait(timeout=90)
+                
+                if not completed:
+                    print("采集超时！")
+                    return False
+                
+                # 等待数据处理完成
+                print("等待数据处理完成...")
+                try:
+                    flir_processor_future.result(timeout=30)
+                    thermal_processor_future.result(timeout=30)
+                    print("所有数据处理完成")
+                except Exception as e:
+                    print(f"数据处理出错: {e}")
                 
                 # 清理相机
+                try:
+                    print("正在重置FLIR相机设置...")
+                    self.flir._disable_chunk_data(nodemap)
+                    self.flir._reset_trigger(nodemap)
+                except Exception as e:
+                    print(f"重置FLIR相机设置时出错: {e}")
+                    
                 if cam.IsStreaming():
                     cam.EndAcquisition()
                 cam.DeInit()
@@ -214,6 +243,10 @@ class AsyncFlirThermalController:
     
     def _flir_capture_worker(self, cam, nodemap):
         """FLIR相机采集工作线程"""
+        setup_nice_thread(
+            nice_value=-15,        # 高优先级
+            cpu_list=[0, 1]       # 绑定到Denver核心
+        )
         try:
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
@@ -225,6 +258,8 @@ class AsyncFlirThermalController:
                     image_result.Release()
                     continue
                 
+                capture_time = datetime.datetime.now().timestamp()
+                
                 # 快速获取数据并放入队列
                 image_data = image_result.GetNDArray().copy()
                 _, exposure_time = self.flir.read_chunk_data(image_result)
@@ -233,15 +268,24 @@ class AsyncFlirThermalController:
                     'index': i,
                     'data': image_data,
                     'exposure_time': exposure_time,
-                    'timestamp': 0  # 不再收集真实时间戳，使用占位符
+                    'timestamp': capture_time
                 })
+                
+                # 只在推流帧上做图像处理
+                with self.stream_lock:
+                    self._stream_frame_count += 1
+                    if self._stream_frame_count % self.stream_push_interval == 0:
+                        flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                        self.latest_flir = flir_img
+                        # self._try_stream()
+                # 其他帧跳过图像处理
                 
                 image_result.Release()
             
             print(f"FLIR相机采集完成，共采集 {NUM_IMAGES} 张图像")
             
             # 标记FLIR采集完成
-            self._mark_camera_complete("FLIR")
+            self._mark_camera_complete()
             
         except Exception as e:
             print(f"FLIR采集线程错误: {e}")
@@ -254,35 +298,35 @@ class AsyncFlirThermalController:
             if self.thermal_cam.start_capture():
                 # 等待采集和处理完全完成
                 self.thermal_cam.wait_for_completion()
-                print("红外相机采集完成")
-            else:
-                print("红外相机启动采集失败")
+                print("红外相机数据处理完成")
             
-            # 标记红外相机完成
-            self._mark_camera_complete("红外")
+            # 标记红外相机完成（包括处理）
+            self._mark_camera_complete()
             
         except Exception as e:
             print(f"红外相机采集线程错误: {e}")
             RUNNING.value = 0
 
-    def _mark_camera_complete(self, camera_name):
+    def _mark_camera_complete(self):
         """标记相机完成采集"""
         with self.status_lock:
             self.completed_cameras += 1
+            print(f"相机完成采集进度: {self.completed_cameras}/2")
             if self.completed_cameras >= 2:  # 两个相机都完成
                 print("所有相机采集完成！")
                 self.capture_complete_event.set()
     
     def _flir_data_processor(self):
         """FLIR数据处理线程"""
+        print("FLIR数据处理线程启动...")
         images = {}
         exposure_times = {}
         timestamps = {}
         
         while True:
             try:
-                # 从队列获取数据，超时10秒
-                data = self.flir_queue.get(timeout=10)
+                # 从队列获取数据，超时5秒
+                data = self.flir_queue.get(timeout=5)
                 
                 if data is None:  # 结束信号
                     break
@@ -304,12 +348,24 @@ class AsyncFlirThermalController:
         # 处理和保存数据
         if images:
             self._save_flir_data(images, exposure_times, timestamps)
+        
+        print("FLIR数据处理线程完成")
     
     def _thermal_data_processor(self):
         """红外数据处理线程"""
-        # 红外相机数据处理已经在thermal_lib中的process_frames方法中处理
-        # 这里等待采集完成
-        self.capture_complete_event.wait()
+        print("红外数据处理线程启动...")
+        pass
+        
+        # 等待采集完成
+        # self.capture_complete_event.wait()
+        
+        # # 红外相机数据处理已经在thermal_lib中的process_frames方法中处理
+        # # 这里添加额外的等待确保处理完全完成
+        # if self.thermal_cam:
+        #     print("等待红外相机内部处理完成...")
+        #     time.sleep(2)  # 给红外相机额外时间完成处理
+        
+        # print("红外数据处理线程完成")
     
     def _save_flir_data(self, images, exposure_times, timestamps):
         """保存FLIR数据"""
@@ -319,17 +375,23 @@ class AsyncFlirThermalController:
         # 跳过第一张图像（索引0）
         valid_indices = [i for i in sorted_indices if i > 0]
         
+        if not valid_indices:
+            print("没有有效的FLIR图像需要保存")
+            return
+        
         # 准备数据数组
         image_array = np.array([images[i] for i in valid_indices])
         exposure_array = np.array([exposure_times[i] for i in valid_indices])
+        timestamp_list = np.array([timestamps[i] for i in valid_indices])
         
-        # 保存数据（只传递图像和曝光时间）
-        self.flir._save_data(image_array, exposure_array, self.save_path)
+        self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
         print(f"已保存 {len(valid_indices)} 张FLIR图像")
     
     def cleanup(self):
         """清理资源"""
         try:
+            print("开始清理异步控制器资源...")
+            
             # 停止所有采集
             RUNNING.value = 0
             
@@ -343,7 +405,7 @@ class AsyncFlirThermalController:
             if not self.capture_complete_event.is_set():
                 self.capture_complete_event.set()
             
-            # 关闭线程池
+            # 关闭线程池，等待所有任务完成
             if hasattr(self, 'executor') and self.executor:
                 try:
                     self.executor.shutdown(wait=True)
@@ -354,12 +416,14 @@ class AsyncFlirThermalController:
             if self.flir:
                 try:
                     self.flir.cleanup()
+                    print("FLIR相机资源已清理")
                 except Exception as e:
                     print(f"清理FLIR相机时出错: {e}")
             
             if self.thermal_cam:
                 try:
                     self.thermal_cam.cleanup()
+                    print("红外相机资源已清理")
                 except Exception as e:
                     print(f"清理红外相机时出错: {e}")
                 
@@ -367,7 +431,16 @@ class AsyncFlirThermalController:
             print(f"清理资源时出错: {e}")
 
 def main():
-    """主函数"""
+    """主函数 - Xavier NX优化版实时优先级支持"""
+    print("=== 双相机同步采集系统 (FLIR+红外) (Xavier NX优化) ===")
+    
+    # 检查系统实时权限
+    has_rt_perms = print_system_info()
+    
+    if not has_rt_perms:
+        print("建议以root权限运行以获得最佳性能: sudo python3 sync_2_fr.py")
+        print("继续运行（性能可能受限）...")
+    
     # 初始化共享变量
     RUNNING.value = 1
     ACQUISITION_FLAG.value = 0
@@ -383,7 +456,7 @@ def main():
     
     try:
         # 并行初始化相机
-        print("开始初始化相机...")
+        print("\n正在初始化相机...")
         if not controller.initialize_cameras():
             print("相机初始化失败")
             return False
@@ -391,14 +464,14 @@ def main():
         print("所有相机初始化成功")
         
         # 开始异步采集
-        print("开始异步采集...")
+        print("\n开始异步采集...")
         if not controller.start_capture():
             print("采集失败")
             return False
         
         # 短暂延时确保所有处理完成
         time.sleep(1)
-        print("采集完成")
+        print("\n采集完成")
         return True
         
     except Exception as e:
@@ -406,6 +479,13 @@ def main():
         return False
     finally:
         controller.cleanup()
+        
+        # 最终清理SDK
+        try:
+            from thermal_lib import ensure_sdk_cleanup
+            ensure_sdk_cleanup()
+        except Exception as e:
+            print(f"清理SDK全局资源时出错: {e}")
 
     print("程序执行完成")
     return True

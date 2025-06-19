@@ -89,6 +89,9 @@ class ThermalCamera:
         VIDEOCALLBACKFUNC = CFUNCTYPE(c_int, c_void_p, c_void_p)
         self.callback = VIDEOCALLBACKFUNC(self.frame_callback)
 
+        # 添加推流计数器相关属性
+        self.stream_push_interval = STREAM_PUSH_INTERVAL
+        self._stream_frame_count = 0
 
     def set_realtime_callback(self, callback):
         self.realtime_callback = callback
@@ -196,7 +199,6 @@ class ThermalCamera:
             
             if frame_count > 0:
                 frames_to_be_saved = max(0, frame_count - 1)
-                print(f"红外相机配置成功。将尝试采集 {frame_count} 帧，预计保存 {frames_to_be_saved} 帧 (丢弃第一帧后)。")
             else: # frame_count == 0
                 print(f"红外相机配置成功。请求采集 0 帧，将不保存任何图像。")
             return True
@@ -224,6 +226,9 @@ class ThermalCamera:
         self.copy_future = None
         self.process_future = None
         
+        # 重置推流计数器
+        self._stream_frame_count = 0
+        
         # 启动数据拷贝线程（优先级设置在工作函数内）
         self.copy_future = self.executor.submit(self._async_copy_worker)
         
@@ -233,8 +238,7 @@ class ThermalCamera:
     def _async_copy_worker(self):
         """异步数据拷贝工作线程"""
         # 在工作函数开始时设置线程优先级
-        setup_nice_thread(nice_value=-15, cpu_list=[4, 5])
-        # print("红外相机数据拷贝线程已绑定到CPU 4-5")
+        # setup_nice_thread(nice_value=-15, cpu_list=[4, 5])
         
         processed_count = 0
 
@@ -255,26 +259,27 @@ class ThermalCamera:
                         )
                         processed_count += 1
 
+                    # 只在推流帧上处理实时回调
                     if self.realtime_callback and frame_index > 0:
-                        # 转灰度
-                        local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
-                        sdk_frame2gray(byref(self.frame_buffer[frame_index]), byref(local_gray))
-                        gray_array = np.frombuffer(local_gray, dtype=np.uint16).reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
-                        # 归一化到0-255
-                        # min_val = gray_array.min()
-                        # max_val = gray_array.max()
-                        # if max_val == min_val:
-                        #     gray_norm = np.zeros_like(gray_array, dtype=np.uint8)
-                        # else:
-                        #     gray_norm = ((gray_array - min_val) * (255.0 / (max_val - min_val))).astype(np.uint8)
-                        # 逆时针旋转90度
-                        rotated = np.rot90(gray_array)
-                        # resize为600x600
-                        thermal_img = cv.resize(rotated, (600, 600))
-                        # 直接回调灰度图
-                        self.realtime_callback(thermal_img)     
+                        self._stream_frame_count += 1
+                        
+                        # 只在推流帧上做图像处理
+                        if self._stream_frame_count % self.stream_push_interval == 0:
+                            # print("stream_frame_count: ", self._stream_frame_count)
+                            # 转灰度
+                            local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
+                            sdk_frame2gray(byref(self.frame_buffer[frame_index]), byref(local_gray))
+                            gray_array = np.frombuffer(local_gray, dtype=np.uint16).reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
+                            
+                            # 逆时针旋转90度
+                            rotated = np.rot90(gray_array)
+                            # resize为600x600
+                            thermal_img = cv.resize(rotated, (600, 600))
+                            # 直接回调灰度图
+                            self.realtime_callback(thermal_img)
+                        # 其他帧跳过图像处理，不调用回调
+                            
                 except (ValueError, OSError) as e:
-
                     print(f"处理错误: {e}")
                 finally:
                     # 确保无论成功失败都调用task_done
@@ -294,7 +299,7 @@ class ThermalCamera:
                     pass
 
         print(f"数据拷贝完成: {processed_count} 帧")
-    
+
     def wait_for_completion(self):
         """等待采集和处理完成 - 独立采集版本"""
         # 等待采集完成

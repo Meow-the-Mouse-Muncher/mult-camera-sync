@@ -1,5 +1,10 @@
 sudo LD_LIBRARY_PATH=/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib python sync_3_camera_async.py
 sudo LD_LIBRARY_PATH=/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib python test_stream.py
+
+sudo LD_LIBRARY_PATH=/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib python sync_2_fe.py 
+
+sudo LD_LIBRARY_PATH=/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib python sync_3_camera_async_fr.py 
+
 # Bias参数配置
 
 ## bias_diff

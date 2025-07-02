@@ -11,6 +11,9 @@ from metavision_core.event_io import EventsIterator
 from metavision_hal import I_TriggerIn
 from metavision_core.event_io.raw_reader import initiate_device
 from metavision_hal import I_EventTrailFilterModule
+from metavision_sdk_core import OnDemandFrameGenerationAlgorithm
+os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+from lib import streamPiper
 
 class EventCamera:
     """Prophesee事件相机控制类"""
@@ -96,10 +99,10 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        self.device.get_i_ll_biases().set('bias_diff_off', 50)
-        self.device.get_i_ll_biases().set('bias_diff_on', 50)
-        # self.device.get_i_ll_biases().set('bias_hpf', 90)
-        # self.device.get_i_ll_biases().set('bias_fo', 55)
+        self.device.get_i_ll_biases().set('bias_diff_off',140)
+        self.device.get_i_ll_biases().set('bias_diff_on', 140)
+        # self.device.get_i_ll_biases().set('bias_hpf', 60)
+        # self.device.get_i_ll_biases().set('bias_fo', 40)
         
         # # # 假设 device 是已初始化的设备对象
         # if PROPHESEE_CUT_TRAIL:
@@ -137,9 +140,23 @@ class EventCamera:
             self.timestamps[0] = star_time
 
         mv_iterator = EventsIterator.from_device(device=self.device,delta_t=7e4)
-        print("事件流记录开始")
-
-        for _ in mv_iterator:
+        # print("事件流记录开始")
+        # on_demand_gen = OnDemandFrameGenerationAlgorithm(600, 600, accumulation_time_us=40000)
+        # frame_period_us = int(1e6/12)  # 12FPS
+        # next_processing_ts = frame_period_us
+        # frame = np.zeros((600, 600, 3), np.uint8)
+        # stream_push = streamPiper.streamPiper(600,600)
+        for evs in mv_iterator:
+            # evs['x'] = evs['x'] - 340
+            # evs['y'] = evs['y'] - 60
+            # on_demand_gen.process_events(evs)  # Feed events to the frame generator
+            # if len(evs["t"]) == 0:
+            #     continue  # 跳过无事件的帧
+            # ts = evs["t"][-1] # Trigger new frame generations as long as the last event is high enough
+            # while(ts > next_processing_ts):
+            #     on_demand_gen.generate(next_processing_ts, frame)
+            #     stream_push.push(frame)
+            #     next_processing_ts += frame_period_us
             if ACQUISITION_FLAG.value == 1 or not RUNNING.value:
                 break
         self.stop_recording()

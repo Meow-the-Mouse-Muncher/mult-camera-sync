@@ -422,7 +422,7 @@ class FlirCamera:
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
                     break
-                image_result = cam.GetNextImage(1000)
+                image_result = cam.GetNextImage(20000)
                 if image_result.IsIncomplete():
                     print(f'图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()

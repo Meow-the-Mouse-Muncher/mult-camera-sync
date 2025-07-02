@@ -85,21 +85,41 @@ class AsyncCameraController:
                 ser.close()
 
 
-    def _on_thermal_frame(self, thermal_img):
-        """红外相机实时回调 - 修改为同步推流逻辑"""
-        with self.stream_lock:
-            # thermal_img已经是推流帧处理后的结果
-            self._thermal_frame_count += self.stream_push_interval  # 同步计数器
-            self.latest_thermal = thermal_img
-            # 尝试同步推流
-            self._try_sync_stream()
 
-    def _try_sync_stream(self):
-        """同步推流 """
-        thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
-        self.streamPiper_instance.push(thermal_rgb)
+    # def _try_sync_stream(self):
+    #     """同步推流 - 只有两个相机都准备好才推流"""
+    #     if (self.flir_ready_for_stream and self.thermal_ready_for_stream and
+    #         self.latest_flir is not None and self.latest_thermal is not None and
+    #         self.latest_flir_stream_id > 0 and self.latest_thermal_stream_id > 0):
+            
+    #         # 检查两个推流ID是否匹配或相近
+    #         stream_id_diff = abs(self.latest_flir_stream_id - self.latest_thermal_stream_id)
+            
+    #         if stream_id_diff <= 1:  # 允许1个推流周期的差距
+    #             # 执行推流
+    #             half = self.stream_width // 2
+    #             flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+    #             thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
+    #             combined = np.zeros((self.stream_height, self.stream_width, 3), dtype=np.uint8)
+    #             combined[:, :half] = flir_rgb[:, :half, :]
+    #             combined[:, half:] = thermal_rgb[:, half:, :]
+    #             self.streamPiper_instance.push(combined)
                 
-
+    #             # print(f"✓ 同步推流成功: FLIR-ID{self.latest_flir_stream_id} + 红外-ID{self.latest_thermal_stream_id}")
+                
+    #             # 重置推流状态，等待下一次同步
+    #             self.flir_ready_for_stream = False
+    #             self.thermal_ready_for_stream = False
+    #         else:
+    #             # print(f"⚠ 推流ID差距过大: FLIR-ID{self.latest_flir_stream_id}, 红外-ID{self.latest_thermal_stream_id}, 差距:{stream_id_diff}")
+                
+    #             # 如果差距过大，重置较旧的那个，等待重新同步
+    #             if self.latest_flir_stream_id < self.latest_thermal_stream_id:
+    #                 print("重置FLIR推流状态，等待下一个FLIR推流帧")
+    #                 self.flir_ready_for_stream = False
+    #             else:
+    #                 print("重置红外推流状态，等待下一个红外推流帧")
+    #                 self.thermal_ready_for_stream = False
 
     def initialize_cameras(self):
         """初始化所有相机"""
@@ -149,7 +169,6 @@ class AsyncCameraController:
         """初始化红外相机"""
         try:
             self.thermal_cam = ThermalCamera()
-            self.thermal_cam.set_realtime_callback(self._on_thermal_frame)
             if not self.thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
                 print("红外相机初始化失败")
                 return False
@@ -193,8 +212,8 @@ class AsyncCameraController:
                 break
         
         # 启动数据处理线程
-        # self.executor.submit(self._flir_data_processor)
-        self.executor.submit(self._thermal_data_processor)
+        self.executor.submit(self._flir_data_processor)
+        # self.executor.submit(self._thermal_data_processor)
         self.executor.submit(self._event_data_processor)
         
         # 配置FLIR相机
@@ -209,13 +228,13 @@ class AsyncCameraController:
                     return False
                 
                 cam.BeginAcquisition()
-                # print("FLIR相机配置成功")
+                print("FLIR相机配置成功")
                 
                 # 启动采集线程
                 self.executor.submit(self._thermal_capture_worker)
                 # time.sleep(2.1)  # 确保红外相机先启动
                 self.executor.submit(self._prophesee_capture_worker)
-                # self.executor.submit(self._flir_capture_worker, cam, nodemap)
+                self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
                 self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
@@ -273,7 +292,7 @@ class AsyncCameraController:
                     'timestamp': capture_time 
                 })
                 
-                # # 修改：使用独立的FLIR计数器，只在推流帧上处理
+                # 修改：使用独立的FLIR计数器，只在推流帧上处理
                 # with self.stream_lock:
                 #     self._flir_frame_count += 1
                     
@@ -287,11 +306,11 @@ class AsyncCameraController:
                 #         self.latest_flir_stream_id = self._flir_frame_count // self.stream_push_interval
                 #         self.flir_ready_for_stream = True
                         
-                #         # print(f"FLIR推流帧准备: 推流ID {self.latest_flir_stream_id}")
+                        # print(f"FLIR推流帧准备: 推流ID {self.latest_flir_stream_id}")
                         
-                #         # 尝试同步推流
-                #         self._try_sync_stream()
-                #     # 其他帧完全跳过图像处理
+                        # # 尝试同步推流
+                        # self._try_sync_stream()
+                    # 其他帧完全跳过图像处理
                 
                 image_result.Release()
             ACQUISITION_FLAG.value = 1
@@ -343,11 +362,11 @@ class AsyncCameraController:
     def _mark_camera_complete(self):
         """标记相机完成采集"""
         with self.status_lock:
-            # self.completed_cameras += 1
-            # print(f"相机完成采集进度: {self.completed_cameras}/3")
-            # if self.completed_cameras >= 3:  # 三个相机都完成
-            #     print("所有相机采集完成！")
-            self.capture_complete_event.set()
+            self.completed_cameras += 1
+            print(f"相机完成采集进度: {self.completed_cameras}/3")
+            if self.completed_cameras >= 3:  # 三个相机都完成
+                print("所有相机采集完成！")
+                self.capture_complete_event.set()
     
     def _flir_data_processor(self):
         """FLIR数据处理线程"""

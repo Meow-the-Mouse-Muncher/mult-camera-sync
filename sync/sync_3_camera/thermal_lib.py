@@ -261,6 +261,7 @@ class ThermalCamera:
 
                     # 只在推流帧上处理实时回调
                     if self.realtime_callback and frame_index > 0:
+                        # print("stream_frame_count: ", self._stream_frame_count)
                         self._stream_frame_count += 1
                         
                         # 只在推流帧上做图像处理

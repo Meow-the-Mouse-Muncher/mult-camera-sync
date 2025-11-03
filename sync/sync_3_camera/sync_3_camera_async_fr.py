@@ -16,7 +16,7 @@ from flir_lib import FlirCamera
 from thermal_lib import ThermalCamera
 from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
 os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
-from lib import streamPiper
+# from lib import streamPiper
 
 class AsyncCameraController:
     """异步相机控制器"""
@@ -44,7 +44,7 @@ class AsyncCameraController:
         self.completed_cameras = 0
         self.stream_width = 600
         self.stream_height = 600
-        self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
+        # self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
         self.latest_flir = None
         self.latest_thermal = None
         self.stream_lock = Lock()
@@ -85,53 +85,53 @@ class AsyncCameraController:
                 ser.close()
 
 
-    def _on_thermal_frame(self, thermal_img):
-    #     """红外相机实时回调 - 修改为同步推流逻辑"""
-        with self.stream_lock:
-            # thermal_img已经是推流帧处理后的结果
-            self._thermal_frame_count += self.stream_push_interval  # 同步计数器
+    # def _on_thermal_frame(self, thermal_img):
+    # #     """红外相机实时回调 - 修改为同步推流逻辑"""
+    #     with self.stream_lock:
+    #         # thermal_img已经是推流帧处理后的结果
+    #         self._thermal_frame_count += self.stream_push_interval  # 同步计数器
             
-            self.latest_thermal = thermal_img
-            self.latest_thermal_stream_id = self._thermal_frame_count // self.stream_push_interval
-            self.thermal_ready_for_stream = True
+    #         self.latest_thermal = thermal_img
+    #         self.latest_thermal_stream_id = self._thermal_frame_count // self.stream_push_interval
+    #         self.thermal_ready_for_stream = True
     
-            # 尝试同步推流
-            self._try_sync_stream()
+    #         # 尝试同步推流
+    #         self._try_sync_stream()
 
-    def _try_sync_stream(self):
-        """同步推流 - 只有两个相机都准备好才推流"""
-        if (self.flir_ready_for_stream and self.thermal_ready_for_stream and
-            self.latest_flir is not None and self.latest_thermal is not None and
-            self.latest_flir_stream_id > 0 and self.latest_thermal_stream_id > 0):
+    # def _try_sync_stream(self):
+    #     """同步推流 - 只有两个相机都准备好才推流"""
+    #     if (self.flir_ready_for_stream and self.thermal_ready_for_stream and
+    #         self.latest_flir is not None and self.latest_thermal is not None and
+    #         self.latest_flir_stream_id > 0 and self.latest_thermal_stream_id > 0):
             
-            # 检查两个推流ID是否匹配或相近
-            stream_id_diff = abs(self.latest_flir_stream_id - self.latest_thermal_stream_id)
+    #         # 检查两个推流ID是否匹配或相近
+    #         stream_id_diff = abs(self.latest_flir_stream_id - self.latest_thermal_stream_id)
             
-            if stream_id_diff <= 1:  # 允许1个推流周期的差距
-                # 执行推流
-                half = self.stream_width // 2
-                flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
-                thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
-                combined = np.zeros((self.stream_height, self.stream_width, 3), dtype=np.uint8)
-                combined[:, :half] = flir_rgb[:, :half, :]
-                combined[:, half:] = thermal_rgb[:, half:, :]
-                self.streamPiper_instance.push(combined)
+    #         if stream_id_diff <= 1:  # 允许1个推流周期的差距
+    #             # 执行推流
+    #             half = self.stream_width // 2
+    #             flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+    #             thermal_rgb = cv.cvtColor(self.latest_thermal, cv.COLOR_GRAY2RGB)
+    #             combined = np.zeros((self.stream_height, self.stream_width, 3), dtype=np.uint8)
+    #             combined[:, :half] = flir_rgb[:, :half, :]
+    #             combined[:, half:] = thermal_rgb[:, half:, :]
+    #             self.streamPiper_instance.push(combined)
                 
-                # print(f"✓ 同步推流成功: FLIR-ID{self.latest_flir_stream_id} + 红外-ID{self.latest_thermal_stream_id}")
+    #             # print(f"✓ 同步推流成功: FLIR-ID{self.latest_flir_stream_id} + 红外-ID{self.latest_thermal_stream_id}")
                 
-                # 重置推流状态，等待下一次同步
-                self.flir_ready_for_stream = False
-                self.thermal_ready_for_stream = False
-            else:
-                # print(f"⚠ 推流ID差距过大: FLIR-ID{self.latest_flir_stream_id}, 红外-ID{self.latest_thermal_stream_id}, 差距:{stream_id_diff}")
+    #             # 重置推流状态，等待下一次同步
+    #             self.flir_ready_for_stream = False
+    #             self.thermal_ready_for_stream = False
+    #         else:
+    #             # print(f"⚠ 推流ID差距过大: FLIR-ID{self.latest_flir_stream_id}, 红外-ID{self.latest_thermal_stream_id}, 差距:{stream_id_diff}")
                 
-                # 如果差距过大，重置较旧的那个，等待重新同步
-                if self.latest_flir_stream_id < self.latest_thermal_stream_id:
-                    print("重置FLIR推流状态，等待下一个FLIR推流帧")
-                    self.flir_ready_for_stream = False
-                else:
-                    print("重置红外推流状态，等待下一个红外推流帧")
-                    self.thermal_ready_for_stream = False
+    #             # 如果差距过大，重置较旧的那个，等待重新同步
+    #             if self.latest_flir_stream_id < self.latest_thermal_stream_id:
+    #                 print("重置FLIR推流状态，等待下一个FLIR推流帧")
+    #                 self.flir_ready_for_stream = False
+    #             else:
+    #                 print("重置红外推流状态，等待下一个红外推流帧")
+    #                 self.thermal_ready_for_stream = False
 
     def initialize_cameras(self):
         """初始化所有相机"""
@@ -181,7 +181,7 @@ class AsyncCameraController:
         """初始化红外相机"""
         try:
             self.thermal_cam = ThermalCamera()
-            self.thermal_cam.set_realtime_callback(self._on_thermal_frame)
+            # self.thermal_cam.set_realtime_callback(self._on_thermal_frame)
             if not self.thermal_cam.connect(THERMAL_CAMERA_IP, THERMAL_CAMERA_PORT):
                 print("红外相机初始化失败")
                 return False
@@ -205,13 +205,13 @@ class AsyncCameraController:
         self.capture_start_event.clear()
         self.capture_complete_event.clear()
         
-        # 重置推流相关计数器和状态
-        self._flir_frame_count = 0
-        self._thermal_frame_count = 0
-        self.latest_flir_stream_id = -1
-        self.latest_thermal_stream_id = -1
-        self.flir_ready_for_stream = False
-        self.thermal_ready_for_stream = False
+        # # 重置推流相关计数器和状态
+        # self._flir_frame_count = 0
+        # self._thermal_frame_count = 0
+        # self.latest_flir_stream_id = -1
+        # self.latest_thermal_stream_id = -1
+        # self.flir_ready_for_stream = False
+        # self.thermal_ready_for_stream = False
         
         # 重置采集标志
         ACQUISITION_FLAG.value = 0
@@ -250,7 +250,7 @@ class AsyncCameraController:
                 self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
-                self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
+                self.send_pulse_command(NUM_IMAGES-1, FLIR_FRAMERATE)  # stm32的代码会多发一个脉冲
                 
                 # 等待采集完成
                 self.capture_complete_event.wait(timeout=50)  # 50秒超时
@@ -306,24 +306,24 @@ class AsyncCameraController:
                 })
                 
                 # 修改：使用独立的FLIR计数器，只在推流帧上处理
-                with self.stream_lock:
-                    self._flir_frame_count += 1
+                # with self.stream_lock:
+                #     self._flir_frame_count += 1
                     
-                    # 检查是否到达推流帧
-                    if self._flir_frame_count % self.stream_push_interval == 0:
-                        # print(f"FLIR推流帧处理: 第{self._flir_frame_count}帧")
+                #     # 检查是否到达推流帧
+                #     if self._flir_frame_count % self.stream_push_interval == 0:
+                #         # print(f"FLIR推流帧处理: 第{self._flir_frame_count}帧")
                         
-                        # 只在推流帧上做resize
-                        flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
-                        self.latest_flir = flir_img
-                        self.latest_flir_stream_id = self._flir_frame_count // self.stream_push_interval
-                        self.flir_ready_for_stream = True
+                #         # 只在推流帧上做resize
+                #         flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                #         self.latest_flir = flir_img
+                #         self.latest_flir_stream_id = self._flir_frame_count // self.stream_push_interval
+                #         self.flir_ready_for_stream = True
                         
-                        # print(f"FLIR推流帧准备: 推流ID {self.latest_flir_stream_id}")
+                #         # print(f"FLIR推流帧准备: 推流ID {self.latest_flir_stream_id}")
                         
-                        # 尝试同步推流
-                        self._try_sync_stream()
-                    # 其他帧完全跳过图像处理
+                #         # 尝试同步推流
+                #         self._try_sync_stream()
+                #     # 其他帧完全跳过图像处理
                 
                 image_result.Release()
             ACQUISITION_FLAG.value = 1

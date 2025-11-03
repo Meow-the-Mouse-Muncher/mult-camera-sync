@@ -218,7 +218,7 @@ class AsyncCameraController:
                 # self.executor.submit(self._flir_capture_worker, cam, nodemap)
                 
                 # 发送触发指令
-                self.send_pulse_command(NUM_IMAGES, FLIR_FRAMERATE)
+                self.send_pulse_command(NUM_IMAGES-1, FLIR_FRAMERATE)
                 
                 # 等待采集完成
                 self.capture_complete_event.wait(timeout=50)  # 50秒超时

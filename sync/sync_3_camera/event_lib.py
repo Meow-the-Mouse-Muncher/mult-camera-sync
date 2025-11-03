@@ -13,7 +13,7 @@ from metavision_core.event_io.raw_reader import initiate_device
 from metavision_hal import I_EventTrailFilterModule
 from metavision_sdk_core import OnDemandFrameGenerationAlgorithm
 os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
-from lib import streamPiper
+# from lib import streamPiper
 
 class EventCamera:
     """Prophesee事件相机控制类"""
@@ -99,8 +99,8 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        self.device.get_i_ll_biases().set('bias_diff_off',140)
-        self.device.get_i_ll_biases().set('bias_diff_on', 140)
+        self.device.get_i_ll_biases().set('bias_diff_off',105)
+        self.device.get_i_ll_biases().set('bias_diff_on', 105)
         # self.device.get_i_ll_biases().set('bias_hpf', 60)
         # self.device.get_i_ll_biases().set('bias_fo', 40)
         

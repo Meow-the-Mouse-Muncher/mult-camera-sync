@@ -260,24 +260,24 @@ class ThermalCamera:
                         processed_count += 1
 
                     # 只在推流帧上处理实时回调
-                    if self.realtime_callback and frame_index > 0:
-                        # print("stream_frame_count: ", self._stream_frame_count)
-                        self._stream_frame_count += 1
+                    # if self.realtime_callback and frame_index > 0:
+                    #     # print("stream_frame_count: ", self._stream_frame_count)
+                    #     self._stream_frame_count += 1
                         
-                        # 只在推流帧上做图像处理
-                        if self._stream_frame_count % self.stream_push_interval == 0:
-                            # print("stream_frame_count: ", self._stream_frame_count)
-                            # 转灰度
-                            local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
-                            sdk_frame2gray(byref(self.frame_buffer[frame_index]), byref(local_gray))
-                            gray_array = np.frombuffer(local_gray, dtype=np.uint16).reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
+                    #     # 只在推流帧上做图像处理
+                    #     if self._stream_frame_count % self.stream_push_interval == 0:
+                    #         # print("stream_frame_count: ", self._stream_frame_count)
+                    #         # 转灰度
+                    #         local_gray = (c_uint16 * THERMAL_WIDTH * THERMAL_HEIGHT)()
+                    #         sdk_frame2gray(byref(self.frame_buffer[frame_index]), byref(local_gray))
+                    #         gray_array = np.frombuffer(local_gray, dtype=np.uint16).reshape((THERMAL_HEIGHT, THERMAL_WIDTH))
                             
-                            # 逆时针旋转90度
-                            rotated = np.rot90(gray_array)
-                            # resize为600x600
-                            thermal_img = cv.resize(rotated, (600, 600))
-                            # 直接回调灰度图
-                            self.realtime_callback(thermal_img)
+                    #         # 逆时针旋转90度
+                    #         rotated = np.rot90(gray_array)
+                    #         # resize为600x600
+                    #         thermal_img = cv.resize(rotated, (600, 600))
+                    #         # 直接回调灰度图
+                    #         self.realtime_callback(thermal_img)
                         # 其他帧跳过图像处理，不调用回调
                             
                 except (ValueError, OSError) as e:

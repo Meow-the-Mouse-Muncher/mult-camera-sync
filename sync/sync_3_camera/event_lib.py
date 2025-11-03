@@ -47,17 +47,17 @@ class EventCamera:
             while not ev_data.is_done():
                 ev_data.load_n_events(1000000)
             triggers = ev_data.get_ext_trigger_events()
-            
         if len(triggers) > 0:
             print(f"总触发信号数量: {len(triggers)}")
-
-            if polarity in (0, 1):
-                triggers = triggers[triggers['p'] == polarity].copy()
-            print(f"需要保存触发信号数量: {len(triggers)}")
             try:
                 self._save_trigger_timestamps(triggers)
             except Exception as e:
                 print(f"触发信号处理失败: {e}")
+
+            if polarity in (0, 1):
+                triggers = triggers[triggers['p'] == polarity].copy()
+            print(f"需要保存触发信号数量: {len(triggers)}")
+
         else:
             print("未检测到触发信号")
             
@@ -99,8 +99,8 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        self.device.get_i_ll_biases().set('bias_diff_off',105)
-        self.device.get_i_ll_biases().set('bias_diff_on', 105)
+        # self.device.get_i_ll_biases().set('bias_diff_off',105)
+        # self.device.get_i_ll_biases().set('bias_diff_on', 105)
         # self.device.get_i_ll_biases().set('bias_hpf', 60)
         # self.device.get_i_ll_biases().set('bias_fo', 40)
         

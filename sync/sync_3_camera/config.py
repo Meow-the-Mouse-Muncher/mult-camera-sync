@@ -3,7 +3,7 @@ from multiprocessing import Value
 STREAM_PUSH_INTERVAL = 5  # 每5帧推流一次，可根据需要修改
 # FLIR相机配置参数
 FLIR_FRAMERATE = 15  # fps
-FLIR_EXPOSURE_TIME = 12000# us
+FLIR_EXPOSURE_TIME = 1200# us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
@@ -18,7 +18,7 @@ FLIR_AUTO_EXPOSURE_TARGET_GREY_VALUE = 50    # 自动曝光目标灰度值 (0-10
 # FLIR相机分辨率和裁剪设置
 FLIR_ORIGIN_WIDTH = 2448   # 原始宽度
 FLIR_ORIGIN_HEIGHT = 2048  # 原始高度
-FLIR_CROP_ENABLE = True  # 是否裁剪
+FLIR_CROP_ENABLE = False  # 是否裁剪
 FLIR_WIDTH = 1800         # 裁剪后宽度
 FLIR_HEIGHT = 1800        # 裁剪后高度
 # 计算居中偏移量
@@ -45,7 +45,7 @@ PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 220+1 # number of images to save (+1 because prophesee first trigger is incomplete) 100-200
+NUM_IMAGES = 10 # 
 
 #FLIGHT_HEIGHT =
 # 串口配置

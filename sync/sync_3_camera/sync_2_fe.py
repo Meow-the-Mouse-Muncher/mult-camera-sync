@@ -14,9 +14,9 @@ from event_lib import *
 from flir_lib import FlirCamera
 from realtime_priority import print_system_info, setup_realtime_thread, SCHED_RR, setup_nice_thread
 
-# 添加推流支持
-os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
-from lib import streamPiper
+# # 添加推流支持
+# os.environ['LD_LIBRARY_PATH'] = '/home/nvidia/code/mult-camera-sync/sync/sync_3_camera/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+# from lib import streamPiper
 
 def create_save_directories(base_path):
     """创建保存目录结构"""
@@ -60,9 +60,9 @@ class AsyncFlirEventController:
         self.completed_cameras = 0
         
         # 添加推流相关属性
-        self.stream_width = 600
-        self.stream_height = 600
-        self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
+        # self.stream_width = 600
+        # self.stream_height = 600
+        # self.streamPiper_instance = streamPiper.streamPiper(self.stream_width, self.stream_height)
         self.latest_flir = None
         self.stream_lock = Lock()
         self.stream_push_interval = STREAM_PUSH_INTERVAL
@@ -89,11 +89,11 @@ class AsyncFlirEventController:
             if 'ser' in locals():
                 ser.close()
 
-    def _try_stream(self):
-        """推送FLIR图像"""
-        if self.latest_flir is not None:
-            flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
-            self.streamPiper_instance.push(flir_rgb)
+    # def _try_stream(self):
+    #     """推送FLIR图像"""
+    #     if self.latest_flir is not None:
+    #         flir_rgb = cv.cvtColor(self.latest_flir, cv.COLOR_GRAY2RGB)
+    #         # self.streamPiper_instance.push(flir_rgb)
     
     def initialize_cameras(self):
         """初始化所有相机"""
@@ -237,13 +237,13 @@ class AsyncFlirEventController:
                     'timestamp': capture_time
                 })
                 
-                # 添加推流功能
-                with self.stream_lock:
-                    self._stream_frame_count += 1
-                    if self._stream_frame_count % self.stream_push_interval == 0:
-                        flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
-                        self.latest_flir = flir_img
-                        self._try_stream()
+                # # 添加推流功能
+                # with self.stream_lock:
+                #     self._stream_frame_count += 1
+                #     if self._stream_frame_count % self.stream_push_interval == 0:
+                #         flir_img = cv.resize(image_data, (self.stream_width, self.stream_height))
+                #         self.latest_flir = flir_img
+                #         self._try_stream()
                 
                 image_result.Release()
             
@@ -332,21 +332,21 @@ class AsyncFlirEventController:
         # 按索引排序
         sorted_indices = sorted(images.keys())
         
-        # 跳过第一张图像（索引0）
-        valid_indices = [i for i in sorted_indices if i > 0]
+        # # 跳过第一张图像（索引0）
+        # valid_indices = [i for i in sorted_indices if i > 0]
         
-        if not valid_indices:
-            print("没有有效的FLIR图像需要保存")
-            return
+        # if not valid_indices:
+        #     print("没有有效的FLIR图像需要保存")
+        #     return
         
         # 准备数据数组
-        image_array = np.array([images[i] for i in valid_indices])
-        exposure_array = np.array([exposure_times[i] for i in valid_indices])
-        timestamp_list = np.array([timestamps[i] for i in valid_indices])
+        image_array = np.array([images[i] for i in sorted_indices])
+        exposure_array = np.array([exposure_times[i] for i in sorted_indices])
+        timestamp_list = np.array([timestamps[i] for i in sorted_indices])
         
         # 保存数据（传递时间戳）
         self.flir._save_data(image_array, exposure_array, timestamp_list, self.save_path)
-        print(f"已保存 {len(valid_indices)} 张FLIR图像")
+        print(f"已保存 {len(sorted_indices)} 张FLIR图像")
     
     def cleanup(self):
         """清理资源"""

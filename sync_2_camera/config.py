@@ -39,14 +39,14 @@ THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 # Prophesee事件相机配置
 PROPHESEE_FILTER_THS = 20000  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = False  # If true, after an event goes through, it removes all events until change of polarity
-EVENT_RATE_LIMIT = 50000000  # 限制事件流的最大速率
+EVENT_RATE_LIMIT = 500000000  # 限制事件流的最大速率
 PROPHESEE_Digital_Crop = False  # If true, crop the image to the ROI
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 100 # 
+NUM_IMAGES = 300 # 
 
 #FLIGHT_HEIGHT =
 # 串口配置

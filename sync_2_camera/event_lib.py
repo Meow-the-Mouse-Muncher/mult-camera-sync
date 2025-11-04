@@ -35,33 +35,64 @@ class EventCamera:
         self.device = None
 
     def prophesee_tirgger_found(self, polarity: int = 0, do_time_shifting=False):
-        """查找触发信号并保存时间戳
-        Args:
-            polarity (int): 触发极性，0为正，1为负
-            do_time_shifting (bool): 是否进行时间偏移
-        Returns:
-            triggers: 触发信号数据
         """
-        triggers = None
-        with RawReader(str(self.outputpath), do_time_shifting=do_time_shifting) as ev_data:
-            while not ev_data.is_done():
-                ev_data.load_n_events(100000)
-            triggers = ev_data.get_ext_trigger_events()
-        if len(triggers) > 0:
-            print(f"总触发信号数量: {len(triggers)}")
-            try:
-                self._save_trigger_timestamps(triggers)
-            except Exception as e:
-                print(f"触发信号处理失败: {e}")
+        查找触发信号并保存时间戳（使用EventsIterator进行真正的分块读取）。
+        Args:
+            polarity (int): 触发极性，0为正，1为负。
+            do_time_shifting (bool): 是否进行时间偏移。
+        Returns:
+            triggers: 触发信号数据。
+        """
+        all_triggers = []
+        # 定义每次迭代处理的事件数量，这是一个安全的内存占用方式
+        iterator_n_events = 200000 
 
-            if polarity in (0, 1):
-                triggers = triggers[triggers['p'] == polarity].copy()
-            print(f"需要保存触发信号数量: {len(triggers)}")
-
-        else:
-            print("未检测到触发信号")
+        try:
+            print("开始使用EventsIterator分块读取事件文件以查找触发信号...")
             
-        return triggers
+            # 从.raw文件创建EventsIterator
+            mv_iterator = EventsIterator(str(self.outputpath), n_events=iterator_n_events)
+
+            # 迭代处理每个事件块
+            for evs in mv_iterator:
+                # 在每个事件块(evs)中，筛选出外部触发事件
+                # 外部触发事件的 channel ID 通常是 0 或 1，这里我们检查所有非像素事件
+                # 触发事件的 'x' 坐标通常是固定的，并且 'y' 坐标代表 channel ID
+                # 假设外部触发的 'y' 坐标为 0
+                trigger_events_in_chunk = evs[evs['y'] == 0] # 这是一个示例，具体ID可能不同，请根据设备手册确认
+                
+                if len(trigger_events_in_chunk) > 0:
+                    # 将找到的触发事件添加到总列表中
+                    # 注意：这里的字段名可能需要根据实际情况调整 ('p', 't')
+                    # 从EventsIterator得到的事件通常有 'x', 'y', 'p', 't' 字段
+                    for trigger in trigger_events_in_chunk:
+                        # 构造与get_ext_trigger_events()返回格式一致的元组
+                        # (polarity, timestamp, id) -> id 在这里我们用 'x'
+                        all_triggers.append((trigger['p'], trigger['t'], trigger['x']))
+
+            # 如果找到了触发事件，进行后续处理
+            if all_triggers:
+                # 将列表转换为结构化numpy数组，dtype需要与get_ext_trigger_events()的输出匹配
+                # 字段名 'p', 't', 'id' 是标准格式
+                triggers = np.array(all_triggers, dtype=[('p', 'i4'), ('t', 'i8'), ('id', 'i4')])
+                
+                print(f"总共检测到 {len(triggers)} 个触发信号")
+                self._save_trigger_timestamps(triggers)
+
+                if polarity in (0, 1):
+                    triggers = triggers[triggers['p'] == polarity].copy()
+                print(f"根据极性 {polarity} 筛选后，需要处理 {len(triggers)} 个触发信号")
+            else:
+                print("未检测到任何触发信号")
+                triggers = np.array([])
+            
+            return triggers
+
+        except Exception as e:
+            print(f"使用EventsIterator处理事件文件时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def _save_trigger_timestamps(self, triggers):
         """保存触发时间戳

@@ -3,7 +3,7 @@ from multiprocessing import Value
 STREAM_PUSH_INTERVAL = 5  # 每5帧推流一次，可根据需要修改
 # FLIR相机配置参数
 FLIR_FRAMERATE = 15  # fps
-FLIR_EXPOSURE_TIME = 18200# us
+FLIR_EXPOSURE_TIME = 10200# us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
@@ -39,13 +39,14 @@ THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 # Prophesee事件相机配置
 PROPHESEE_FILTER_THS = 20000  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = False  # If true, after an event goes through, it removes all events until change of polarity
+EVENT_RATE_LIMIT = 500000000  # 限制事件流的最大速率
 PROPHESEE_Digital_Crop = False  # If true, crop the image to the ROI
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 6 # 
+NUM_IMAGES = 300 # 
 
 #FLIGHT_HEIGHT =
 # 串口配置

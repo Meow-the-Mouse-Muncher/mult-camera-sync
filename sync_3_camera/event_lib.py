@@ -99,8 +99,20 @@ class EventCamera:
         if PROPHESEE_Digital_Crop:
             self._config_roi()
 
-        # self.device.get_i_ll_biases().set('bias_diff_off',105)
-        # self.device.get_i_ll_biases().set('bias_diff_on', 105)
+        # self.device.get_i_ll_biases().set('bias_diff_off',50)
+        # self.device.get_i_ll_biases().set('bias_diff_on', 50)
+        # 配置ERC
+        erc_module = self.device.get_i_erc_module()
+        if erc_module:
+            # 设置CD事件率
+            erc_module.set_cd_event_rate(EVENT_RATE_LIMIT)
+            # 启用ERC
+            erc_module.enable(True)
+            # 读取实际设置的事件率
+            current_rate = erc_module.get_cd_event_rate()
+            print("Event Rate Control enabled:")
+            print(f"- CD event rate: {current_rate/1000000:.1f}MEv/s")
+
         # self.device.get_i_ll_biases().set('bias_hpf', 60)
         # self.device.get_i_ll_biases().set('bias_fo', 40)
         

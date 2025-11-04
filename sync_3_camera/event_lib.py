@@ -45,7 +45,7 @@ class EventCamera:
         triggers = None
         with RawReader(str(self.outputpath), do_time_shifting=do_time_shifting) as ev_data:
             while not ev_data.is_done():
-                ev_data.load_n_events(1000000)
+                ev_data.load_n_events(100000)
             triggers = ev_data.get_ext_trigger_events()
         if len(triggers) > 0:
             print(f"总触发信号数量: {len(triggers)}")

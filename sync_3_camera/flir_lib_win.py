@@ -30,182 +30,8 @@ class FlirCamera:
         else:
             return False
 
-    def configure_camera(self, cam, nodemap):
-        """配置相机参数"""
-        try:
-            # 停止采集
-            if cam.IsStreaming():
-                cam.EndAcquisition()
-        
-            # 配置缓冲区
-            try:
-                buffer_count_node = PySpin.CIntegerPtr(nodemap.GetNode("StreamBufferCountManual"))
-                if PySpin.IsAvailable(buffer_count_node) and PySpin.IsWritable(buffer_count_node):
-                    buffer_count_node.SetValue(FLIR_BUFFER_COUNT)
-            except Exception as e:
-                pass  # 某些相机可能不支持此配置
-            
-            # 配置触发模式
-            if FLIR_EX_TRIGGER:
-                trigger_mode = PySpin.CEnumerationPtr(nodemap.GetNode("TriggerMode"))
-                if PySpin.IsAvailable(trigger_mode) and PySpin.IsWritable(trigger_mode):
-                    trigger_mode_on = trigger_mode.GetEntryByName("On")
-                    trigger_mode.SetIntValue(trigger_mode_on.GetValue())
-                
-                trigger_source = PySpin.CEnumerationPtr(nodemap.GetNode("TriggerSource"))
-                if PySpin.IsAvailable(trigger_source) and PySpin.IsWritable(trigger_source):
-                    trigger_source_software = trigger_source.GetEntryByName("Software")
-                    trigger_source.SetIntValue(trigger_source_software.GetValue())
-            
-            # 配置曝光模式
-            exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
-            if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
-                if FLIR_AUTO_EXPOSURE:
-                    # 自动曝光模式
-                    exposure_auto_continuous = exposure_auto.GetEntryByName("Continuous")
-                    exposure_auto.SetIntValue(exposure_auto_continuous.GetValue())
-                    
-                    # 设置自动曝光参数
-                    try:
-                        # 设置曝光时间上限
-                        exposure_time_upper = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTimeUpperLimit"))
-                        if PySpin.IsAvailable(exposure_time_upper) and PySpin.IsWritable(exposure_time_upper):
-                            exposure_time_upper.SetValue(FLIR_AUTO_EXPOSURE_TIME_UPPER_LIMIT)
-                        
-                        # 设置曝光时间下限
-                        exposure_time_lower = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTimeLowerLimit"))
-                        if PySpin.IsAvailable(exposure_time_lower) and PySpin.IsWritable(exposure_time_lower):
-                            exposure_time_lower.SetValue(FLIR_AUTO_EXPOSURE_TIME_LOWER_LIMIT)
-                        
-                        # 设置目标灰度值
-                        target_grey_value = PySpin.CFloatPtr(nodemap.GetNode("AutoExposureTargetGreyValue"))
-                        if PySpin.IsAvailable(target_grey_value) and PySpin.IsWritable(target_grey_value):
-                            target_grey_value.SetValue(FLIR_AUTO_EXPOSURE_TARGET_GREY_VALUE)
-                    
-                    except Exception as e:
-                        pass  # 某些参数可能不被所有相机支持
-                else:
-                    # 手动曝光模式
-                    exposure_auto_off = exposure_auto.GetEntryByName("Off")
-                    exposure_auto.SetIntValue(exposure_auto_off.GetValue())
-                    
-                    # 设置固定曝光时间
-                    exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
-                    if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
-                        exposure_time.SetValue(FLIR_EXPOSURE_TIME)
-            
-            # 配置帧率
-            acquisition_framerate_enable = PySpin.CBooleanPtr(nodemap.GetNode("AcquisitionFrameRateEnable"))
-            if PySpin.IsAvailable(acquisition_framerate_enable) and PySpin.IsWritable(acquisition_framerate_enable):
-                acquisition_framerate_enable.SetValue(True)
-                
-                acquisition_framerate = PySpin.CFloatPtr(nodemap.GetNode("AcquisitionFrameRate"))
-                if PySpin.IsAvailable(acquisition_framerate) and PySpin.IsWritable(acquisition_framerate):
-                    # 在自动曝光模式下，使用较低的帧率以给自动曝光更多时间
-                    target_framerate = FLIR_FRAMERATE if not FLIR_AUTO_EXPOSURE else max(1, FLIR_FRAMERATE // 2)
-                    acquisition_framerate.SetValue(target_framerate)
-            
-            # 配置裁剪
-            if FLIR_CROP_ENABLE:
-                self._configure_crop(nodemap)
-            
-            # 配置吞吐量限制
-            device_link_throughput_limit = PySpin.CIntegerPtr(nodemap.GetNode("DeviceLinkThroughputLimit"))
-            if PySpin.IsAvailable(device_link_throughput_limit) and PySpin.IsWritable(device_link_throughput_limit):
-                device_link_throughput_limit.SetValue(FLIR_ThroughputLimit)
-            
-            return True
-            
-        except Exception as e:
-            return False
+    
 
-    def capture_images(self, cam, nodemap, num_images):
-        """捕获图像 - 改进的缓冲区处理"""
-        try:
-            # 开始采集
-            cam.BeginAcquisition()
-            
-            images = {}
-            exposure_times = {}
-            timestamps = {}
-            
-            # 在自动曝光模式下，给相机一些时间来稳定曝光
-            if FLIR_AUTO_EXPOSURE:
-                time.sleep(1.0)  # 等待自动曝光稳定
-            
-            for i in range(num_images):
-                try:
-                    if FLIR_EX_TRIGGER:
-                        # 软件触发
-                        trigger_software = PySpin.CCommandPtr(nodemap.GetNode("TriggerSoftware"))
-                        if PySpin.IsAvailable(trigger_software):
-                            trigger_software.Execute()
-                    
-                    # 获取图像
-                    timeout = FLIR_IMAGE_TIMEOUT 
-                    image_result = cam.GetNextImage(timeout)
-                    
-                    if image_result.IsIncomplete():
-                        # 如果图像不完整，释放并继续
-                        image_result.Release()
-                        continue
-                    
-                    # 获取曝光时间
-                    exposure_time = 0
-                    try:
-                        exposure_time_node = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
-                        if PySpin.IsAvailable(exposure_time_node) and PySpin.IsReadable(exposure_time_node):
-                            exposure_time = exposure_time_node.GetValue()
-                    except:
-                        exposure_time = FLIR_EXPOSURE_TIME
-                    
-                    # 转换图像
-                    if FLIR_CROP_ENABLE:
-                        converted_image = image_result.Convert(PySpin.PixelFormat_Mono16, PySpin.HQ_LINEAR)
-                    else:
-                        converted_image = image_result.Convert(PySpin.PixelFormat_Mono16, PySpin.HQ_LINEAR)
-                    
-                    # 获取图像数据
-                    image_data = converted_image.GetNDArray()
-                    timestamp = image_result.GetTimeStamp()
-                    
-                    # 存储数据
-                    images[i] = image_data.copy()
-                    exposure_times[i] = exposure_time
-                    timestamps[i] = timestamp
-                    
-                    # 释放图像
-                    image_result.Release()
-                    converted_image.Release()
-                    
-                except PySpin.SpinnakerException as e:
-                    # 处理Spinnaker异常
-                    if "Failed waiting for EventData" in str(e):
-                        # 这是缓冲区事件等待超时，尝试清理缓冲区
-                        try:
-                            # 尝试获取并丢弃任何pending的图像
-                            while True:
-                                try:
-                                    pending_image = cam.GetNextImage(100)  # 短超时
-                                    pending_image.Release()
-                                except:
-                                    break
-                        except:
-                            pass
-                    continue
-                except Exception as e:
-                    continue
-            
-            cam.EndAcquisition()
-            return images, exposure_times, timestamps
-            
-        except Exception as e:
-            try:
-                if cam.IsStreaming():
-                    cam.EndAcquisition()
-            except:
-                pass
-            return {}, {}, {}
 
     def config_camera(self, nodemap):
         """配置相机参数"""
@@ -571,6 +397,8 @@ class FlirCamera:
                 node_trigger_source_software = node_trigger_source.GetEntryByName('Software')
                 if PySpin.IsReadable(node_trigger_source_software):
                     node_trigger_source.SetIntValue(node_trigger_source_software.GetValue())
+            else:
+                print('无法访问触发源节点')
 
             return True
 
@@ -578,7 +406,7 @@ class FlirCamera:
             print(f'重置触发模式错误: {ex}')
             return False
 
-    def acquire_images(self, cam, nodemap, path):
+    def acquire_images(self, cam, nodemap, path):  #最标准的流程
         """采集图像
         Args:
             cam: 相机实例
@@ -588,25 +416,28 @@ class FlirCamera:
             bool: 采集是否成功
         """
         try:
-            images = np.empty((NUM_IMAGES, FLIR_HEIGHT, FLIR_WIDTH), dtype=np.uint8)
+            # 修改数组形状以存储BGR彩色图像 (height, width, 3 channels)
+            images = np.empty((NUM_IMAGES, FLIR_HEIGHT, FLIR_WIDTH, 3), dtype=np.uint8)
             exposure_times = np.zeros(NUM_IMAGES, dtype=float)
             
             for i in range(NUM_IMAGES):
                 if RUNNING.value == 0:
                     break
-                image_result = cam.GetNextImage(1000)
+                image_result = cam.GetNextImage(20000)
                 if image_result.IsIncomplete():
                     print(f'图像不完整: {image_result.GetImageStatus()}')
                     image_result.Release()
                     continue
                 
-                images[i] = image_result.GetNDArray()
+                # 获取Bayer格式的原始图像
+                raw_image = image_result.GetNDArray()
+                # 将BayerRG8格式转换为BGR彩色图像，以便OpenCV保存
+                images[i] = cv.cvtColor(raw_image, cv.COLOR_BayerRG2BGR)   
                 _, exposure_times[i] = self.read_chunk_data(image_result)
                 image_result.Release()
             
             cam.EndAcquisition()
             ACQUISITION_FLAG.value = 1  # 使用 .value 访问共享变量
-            # 只保存有效图像！！！！
             self._save_data(images[1:], exposure_times[1:], path)
             
             # 添加重置
@@ -620,7 +451,7 @@ class FlirCamera:
             RUNNING.value = 0
             return False
 
-    def _save_data(self, images, exposure_times, path):
+    def _save_data(self, images, exposure_times,timestamps, path):
         """保存采集数据
         Args:
             images: 图像数据
@@ -629,38 +460,22 @@ class FlirCamera:
         """
         # 创建 FLIR 数据目录
         flir_dir = os.path.join(path, "flir")
-        preview_dir = os.path.join(flir_dir, "preview_images")
-        os.makedirs(preview_dir, exist_ok=True)
+        os.makedirs(flir_dir, exist_ok=True)
 
-        # 保存原始数据
-        with open(os.path.join(flir_dir, "images.raw"), 'wb') as f:
-            # 写入头信息
-            header = np.array([NUM_IMAGES-1, FLIR_OFFSET_X, FLIR_OFFSET_Y, 
-                             FLIR_WIDTH, FLIR_HEIGHT], dtype=np.int32)
-            f.write(header.tobytes())
-            
-            # 写入图��数据并生成预览图
-            for idx, img_data in enumerate(images):
-                f.write(img_data.tobytes())
-                if idx % 10 == 0:
-                    # 确保使用正确的 Bayer 模式进行转换
-                    if FLIR_OFFSET_X % 2 == 0 and FLIR_OFFSET_Y % 2 == 0:
-                        rgb_image = cv.cvtColor(img_data, cv.COLOR_BayerRG2RGB)
-                    else:
-                        # 根据偏移量选择正确的 Bayer 模式
-                        bayer_patterns = {
-                            (0, 0): cv.COLOR_BayerRG2RGB,  # RG
-                            (1, 0): cv.COLOR_BayerGR2RGB,  # GR
-                            (0, 1): cv.COLOR_BayerGB2RGB,  # GB
-                            (1, 1): cv.COLOR_BayerBG2RGB   # BG
-                        }
-                        pattern_key = (FLIR_OFFSET_X % 2, FLIR_OFFSET_Y % 2)
-                        rgb_image = cv.cvtColor(img_data, bayer_patterns[pattern_key])
-                    
-                    cv.imwrite(os.path.join(preview_dir, f'preview_{idx}.jpg'), cv.cvtColor(rgb_image, cv.COLOR_RGB2BGR))
+        # 遍历并保存每一张图像为PNG文件
+        print(f"正在保存 {len(images)} 张FLIR图像为PNG格式...")
+        for idx, img_data in enumerate(images):
+            # 文件名使用序号命名，如 0000.png, 0001.png ...
+            filename = os.path.join(flir_dir, f'{idx:04d}.png')
+            # 直接保存原始的Bayer数据为PNG
+            cv.imwrite(filename, img_data)
+        
+        print("FLIR图像保存完成。")
 
-        # 只保存曝光时间，不保存时间戳
+        # 保存曝光时间和时间戳
         np.savetxt(os.path.join(flir_dir, 'exposure_times.txt'), exposure_times)
+        np.savetxt(os.path.join(flir_dir, 'timestamps.txt'), timestamps)
+
 
     def read_chunk_data(self, image):
         """读取图像块数据
@@ -682,7 +497,6 @@ class FlirCamera:
             if self.cam_list:
                 try:
                     self.cam_list.Clear()
-                    print("相机列表已清理")
                 except PySpin.SpinnakerException as ex:
                     print(f"清理相机列表错误: {ex}")
                 self.cam_list = None
@@ -690,7 +504,6 @@ class FlirCamera:
             if self.system:
                 try:
                     self.system.ReleaseInstance()
-                    print("系统实例已释放")
                 except PySpin.SpinnakerException as ex:
                     print(f"释放系统实例错误: {ex}")
                 finally:

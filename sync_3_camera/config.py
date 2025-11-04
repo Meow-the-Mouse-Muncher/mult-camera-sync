@@ -3,7 +3,7 @@ from multiprocessing import Value
 STREAM_PUSH_INTERVAL = 5  # 每5帧推流一次，可根据需要修改
 # FLIR相机配置参数
 FLIR_FRAMERATE = 15  # fps
-FLIR_EXPOSURE_TIME = 1200# us
+FLIR_EXPOSURE_TIME = 18200# us
 FLIR_BALANCE_WHITE = 1.6
 FLIR_AUTO_EXPOSURE = False  # 自动曝光设置
 FLIR_EX_TRIGGER = True  # 触发方式设置
@@ -19,8 +19,8 @@ FLIR_AUTO_EXPOSURE_TARGET_GREY_VALUE = 50    # 自动曝光目标灰度值 (0-10
 FLIR_ORIGIN_WIDTH = 2448   # 原始宽度
 FLIR_ORIGIN_HEIGHT = 2048  # 原始高度
 FLIR_CROP_ENABLE = False  # 是否裁剪
-FLIR_WIDTH = 1800         # 裁剪后宽度
-FLIR_HEIGHT = 1800        # 裁剪后高度
+FLIR_WIDTH = 2448         # 裁剪后宽度
+FLIR_HEIGHT = 2048        # 裁剪后高度
 # 计算居中偏移量
 FLIR_OFFSET_X = (FLIR_ORIGIN_WIDTH - FLIR_WIDTH) // 2   # 水平偏移量
 FLIR_OFFSET_Y = (FLIR_ORIGIN_HEIGHT - FLIR_HEIGHT) // 2 # 垂直偏移量
@@ -39,17 +39,18 @@ THERMAL_TEMP_SEGMENT = 0  # 温度段 (0:常温段, 1:中温段, 2:高温段)
 # Prophesee事件相机配置
 PROPHESEE_FILTER_THS = 20000  # Length of the time window for filtering (in us)
 PROPHESEE_CUT_TRAIL = False  # If true, after an event goes through, it removes all events until change of polarity
-PROPHESEE_Digital_Crop = True  # If true, crop the image to the ROI 
+PROPHESEE_Digital_Crop = False  # If true, crop the image to the ROI
 PROPHESEE_ROI_X0 = 340
 PROPHESEE_ROI_Y0 = 60
 PROPHESEE_ROI_X1 = 939
 PROPHESEE_ROI_Y1 = 659
 # 触发配置
-NUM_IMAGES = 10 # 
+NUM_IMAGES = 6 # 
 
 #FLIGHT_HEIGHT =
 # 串口配置
-SERIAL_PORT = '/dev/ttyTHS1'
+# SERIAL_PORT = '/dev/ttyTHS1'
+SERIAL_PORT = 'COM5'  # Windows下的串口名称
 SERIAL_BAUDRATE = 115200
 SERIAL_TIMEOUT = 1
 
